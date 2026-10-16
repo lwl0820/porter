@@ -364,3 +364,194 @@ describe("转发规则管理", () => {
     expect(calls).toHaveLength(before + 1);
   });
 });
+
+describe("TCP+UDP 组合规则", () => {
+  it("一次创建为一条规则，编辑回显并可切换协议，整体启停和删除各发送一次请求", async () => {
+    records = [];
+    await start();
+    await button("新增规则").trigger("click");
+    await flushPromises();
+    expect(wrapper!.findAll('input[name="protocol"]')).toHaveLength(3);
+    expect(
+      wrapper!.get('input[value="tcp+udp"]').attributes("aria-label"),
+    ).toBe("TCP+UDP");
+    await fillRule("双协议入口");
+    await wrapper!.get('input[value="tcp+udp"]').setValue();
+    await wrapper!.get(".editor").trigger("submit");
+    await flushPromises();
+    const creations = calls.filter(
+      (call) => call.path === "/api/rules" && call.options.method === "POST",
+    );
+    expect(creations).toHaveLength(1);
+    expect(JSON.parse(String(creations[0]!.options.body))).toEqual({
+      name: "双协议入口",
+      protocol: "tcp+udp",
+      listen_host: "0.0.0.0",
+      listen_port: 5353,
+      target_host: "10.0.0.2",
+      target_port: 53,
+      enabled: true,
+    });
+    expect(wrapper!.findAll(".desktop-table tbody tr")).toHaveLength(1);
+    expect(wrapper!.findAll(".mobile-cards .rule-card")).toHaveLength(1);
+    expect(wrapper!.get(".summary-card:first-child strong").text()).toBe("1条");
+    expect(wrapper!.get(".desktop-table .protocol-badge").text()).toBe(
+      "TCP+UDP",
+    );
+    expect(wrapper!.get(".desktop-table .protocol-badge").classes()).toContain(
+      "both",
+    );
+    expect(wrapper!.get(".mobile-cards .protocol-badge").classes()).toContain(
+      "both",
+    );
+
+    for (const [before, next] of [
+      ["tcp+udp", "tcp"],
+      ["tcp", "tcp+udp"],
+      ["tcp+udp", "udp"],
+      ["udp", "tcp+udp"],
+    ]) {
+      await wrapper!
+        .get('.desktop-table [aria-label="编辑 双协议入口"]')
+        .trigger("click");
+      await flushPromises();
+      expect(wrapper!.get(`input[value="${before}"]`).element).toHaveProperty(
+        "checked",
+        true,
+      );
+      await wrapper!.get(`input[value="${next}"]`).setValue();
+      await wrapper!.get(".editor").trigger("submit");
+      await flushPromises();
+      expect(wrapper!.findAll(".desktop-table tbody tr")).toHaveLength(1);
+      expect(wrapper!.get(".desktop-table .protocol-badge").text()).toBe(
+        next!.toUpperCase(),
+      );
+    }
+    const edits = calls.filter((call) => call.options.method === "PUT");
+    expect(edits).toHaveLength(4);
+    expect(edits.every((call) => call.path === "/api/rules/new-rule")).toBe(
+      true,
+    );
+    expect(new Headers(edits[3]!.options.headers).get("If-Match")).toBe('"4"');
+
+    await wrapper!
+      .get('.desktop-table [aria-label="停用 双协议入口"]')
+      .trigger("click");
+    await flushPromises();
+    expect(calls.filter((call) => call.options.method === "PUT")).toHaveLength(
+      5,
+    );
+    const disabled = calls
+      .filter((call) => call.options.method === "PUT")
+      .at(-1)!;
+    expect(JSON.parse(String(disabled.options.body))).toMatchObject({
+      protocol: "tcp+udp",
+      enabled: false,
+    });
+    expect(wrapper!.get(".desktop-table .status-badge").text()).toBe("已停用");
+    await wrapper!
+      .get('.desktop-table [aria-label="启用 双协议入口"]')
+      .trigger("click");
+    await flushPromises();
+    expect(calls.filter((call) => call.options.method === "PUT")).toHaveLength(
+      6,
+    );
+    expect(wrapper!.get(".desktop-table .status-badge").text()).toBe("运行中");
+    expect(wrapper!.get(".summary-card:first-child strong").text()).toBe("1条");
+    await wrapper!
+      .get('.desktop-table [aria-label="删除 双协议入口"]')
+      .trigger("click");
+    await flushPromises();
+    await button("确认删除").trigger("click");
+    await flushPromises();
+    expect(
+      calls.filter((call) => call.options.method === "DELETE"),
+    ).toHaveLength(1);
+    expect(wrapper!.get(".summary-card:first-child strong").text()).toBe("0条");
+    expect(wrapper!.text()).toContain("从第一条规则开始");
+  });
+
+  it("TCP 和 UDP 筛选各包含组合规则，组合筛选只保留一条组合记录", async () => {
+    records = [
+      { ...example, name: "TCP 入口" },
+      { ...example, id: "udp-only", name: "UDP 入口", protocol: "udp" },
+      { ...example, id: "both", name: "组合入口", protocol: "tcp+udp" },
+    ];
+    await start();
+    expect(wrapper!.findAll(".desktop-table tbody tr")).toHaveLength(3);
+    expect(wrapper!.get(".summary-card:first-child strong").text()).toBe("3条");
+    for (const filter of ["tcp", "udp", "tcp+udp"]) {
+      await wrapper!.get('[aria-label="按协议筛选"]').setValue(filter);
+      const names = wrapper!
+        .findAll(".desktop-table .rule-name-cell strong")
+        .map((item) => item.text());
+      expect(names).toEqual(
+        filter === "tcp+udp"
+          ? ["组合入口"]
+          : [`${filter.toUpperCase()} 入口`, "组合入口"],
+      );
+      expect(wrapper!.findAll(".mobile-cards .rule-card")).toHaveLength(
+        names.length,
+      );
+      expect(wrapper!.get(".summary-card:first-child strong").text()).toBe(
+        "3条",
+      );
+    }
+    await wrapper!.get('[aria-label="搜索规则"]').setValue("组合");
+    expect(wrapper!.findAll(".desktop-table tbody tr")).toHaveLength(1);
+    expect(wrapper!.get(".panel-footer").text()).toContain(
+      "显示 1 条，共 3 条规则",
+    );
+    await wrapper!.get('[aria-label="按协议筛选"]').setValue("");
+    await wrapper!.get('[aria-label="搜索规则"]').setValue("");
+    expect(wrapper!.findAll(".desktop-table tbody tr")).toHaveLength(3);
+  });
+
+  it("组合错误整体重试一次，保存冲突后保留组合选择和输入", async () => {
+    records = [
+      {
+        ...example,
+        protocol: "tcp+udp",
+        status: "error",
+        last_error: "UDP 监听端口已被占用",
+      },
+    ];
+    await start();
+    expect(wrapper!.get(".desktop-table").text()).toContain(
+      "UDP 监听端口已被占用",
+    );
+    await wrapper!
+      .get('.desktop-table [aria-label="重试 应用入口"]')
+      .trigger("click");
+    await flushPromises();
+    expect(calls.filter((call) => call.path.endsWith("/retry"))).toHaveLength(
+      1,
+    );
+    expect(wrapper!.get(".desktop-table .status-badge").text()).toBe("运行中");
+    expect(wrapper!.get(".desktop-table .protocol-badge").text()).toBe(
+      "TCP+UDP",
+    );
+    await wrapper!
+      .get('.desktop-table [aria-label="编辑 应用入口"]')
+      .trigger("click");
+    await flushPromises();
+    await wrapper!.get("#rule-name").setValue("双协议新名称");
+    failurePath = "/api/rules/rule-1";
+    failureStatus = 409;
+    failureFields = { listen_port: "UDP 监听端口已被占用" };
+    await wrapper!.get(".editor").trigger("submit");
+    await flushPromises();
+    expect(wrapper!.get('input[value="tcp+udp"]').element).toHaveProperty(
+      "checked",
+      true,
+    );
+    expect(wrapper!.get("#rule-name").element).toHaveProperty(
+      "value",
+      "双协议新名称",
+    );
+    expect(document.activeElement?.id).toBe("listen-port");
+    expect(wrapper!.get(".desktop-table .rule-name-cell strong").text()).toBe(
+      "应用入口",
+    );
+  });
+});

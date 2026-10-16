@@ -4,7 +4,7 @@
 
 Porter is a self-hosted web panel for TCP and UDP port forwarding on one Linux server. Manage forwarding rules from a Chinese-language interface, with SQLite persistence and a single-container deployment.
 
-- Create, inspect, edit, delete, enable, disable, and retry forwarding rules.
+- Create, inspect, edit, delete, enable, disable, and retry TCP, UDP, or combined TCP+UDP rules.
 - Filter by protocol or state, and search names and addresses.
 - Listen on explicit IPv4 or IPv6 addresses; forward to IP addresses or hostnames.
 - Restore enabled rules after restart, without letting one occupied port block the others.
@@ -66,11 +66,13 @@ The container runs as UID 0 with all capabilities dropped except `NET_BIND_SERVI
 | `PORTER_DB_PATH` | `/data/porter.db` | SQLite file path; persist its entire directory. |
 | `PORTER_COOKIE_SECURE` | `false` | Set to `true` when the browser accesses the panel over HTTPS. |
 | `PORTER_MAX_SESSIONS` | `4096` | Global TCP connections and UDP sessions combined. |
-| `PORTER_MAX_SESSIONS_PER_RULE` | `1024` | Combined session limit for each rule. |
+| `PORTER_MAX_SESSIONS_PER_RULE` | `1024` | Combined TCP connection and UDP session limit for each logical rule, including TCP+UDP. |
 | `PORTER_UDP_IDLE_TIMEOUT` | `60s` | UDP session idle timeout, using Go duration syntax. |
 | `PORTER_DIAL_TIMEOUT` | `5s` | Upstream connection timeout, using Go duration syntax. |
 
 Rules accept individual ports from 1 to 65535. TCP and UDP can share the same numeric port. Listen addresses must be local IP addresses; enter IPv6 addresses such as `::` without brackets in rule forms. Destinations accept an IP or hostname separately from the port. Hostnames resolve for each new TCP connection or UDP session, not each datagram. UDP has no connection handshake and does not try another resolved address just because a destination does not respond; use an explicitly reachable IP if only some of a hostname's addresses are reachable. Invalid fields, occupied listeners, and management-port conflicts are reported by the panel. For changes between overlapping listeners, disable the rule before changing its listen address.
+
+Choose **TCP+UDP** to manage both protocols as one rule with one name, revision, enabled state, listen IP/port, and destination host/port. Both protocols use the same numeric destination port; the destination must provide the intended TCP and UDP services there. The rule counts once and shares its session allowance across TCP connections and UDP sessions. Enable, disable, retry, edit, and delete affect both protocols together. A conflict on either listen port fails the entire operation and preserves the existing configuration and sessions. A combined rule is running only while both listeners are ready; if one fails, the other is stopped and the whole rule reports an error. TCP and UDP filters include combined rules, while the TCP+UDP filter shows only combined rules. Existing separate TCP and UDP rules remain separate and are not automatically merged.
 
 Logs go to standard output. `/healthz` reports process and database readiness. The SQLite database stores rule configuration; administrator passwords and login sessions are not persisted in it. Browser login sessions expire after 12 hours or a process restart.
 
@@ -115,6 +117,8 @@ For a release archive, use `./porter` instead. Download `SHA256SUMS` alongside t
 ## Upgrade, backup, and rollback
 
 Pin a version tag such as `v1.0.0` for repeatable deployments once that release exists. Before upgrading, stop Porter and back up the **entire data volume**, including SQLite journal files. Do not copy a live database file in isolation or share its directory between replicas.
+
+TCP+UDP support upgrades the SQLite schema from version 1 to version 2 on startup, preserving existing rule IDs, revisions, timestamps, configuration, and enabled states. Older Porter programs reject a version 2 database. To downgrade, restore the complete backup taken before upgrading together with the older program; do not open the migrated database with an older binary.
 
 Find your Compose volume name with `docker volume ls` (usually `<project>_porter-data`). For example, replace `YOUR_PORTER_VOLUME` below with that name:
 

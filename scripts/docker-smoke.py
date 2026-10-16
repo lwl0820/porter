@@ -29,10 +29,18 @@ def free_port():
 
 class EchoServers:
     def __init__(self):
-        self.tcp = socket.socket()
-        self.udp = socket.socket(type=socket.SOCK_DGRAM)
-        self.tcp.bind(("127.0.0.1", 0))
-        self.udp.bind(("127.0.0.1", 0))
+        for _ in range(100):
+            self.tcp = socket.socket()
+            self.udp = socket.socket(type=socket.SOCK_DGRAM)
+            self.tcp.bind(("127.0.0.1", 0))
+            try:
+                self.udp.bind(self.tcp.getsockname())
+                break
+            except OSError:
+                self.tcp.close()
+                self.udp.close()
+        else:
+            raise RuntimeError("无法为 TCP/UDP 回显服务分配相同数字端口")
         self.tcp.listen()
         self.tcp.settimeout(0.2)
         self.udp.settimeout(0.2)
@@ -144,7 +152,7 @@ class Panel:
         assert session["username"] == "smoke-admin"
 
 
-def verify_traffic(port):
+def verify_tcp(port):
     payload = b"porter-container-tcp\x00"
     with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
         client.sendall(payload)
@@ -153,6 +161,9 @@ def verify_traffic(port):
         while data := client.recv(65536):
             result.extend(data)
         assert result == payload, "TCP 半关闭后响应不完整"
+
+
+def verify_udp(port):
     with socket.socket(type=socket.SOCK_DGRAM) as first, socket.socket(
         type=socket.SOCK_DGRAM
     ) as second:
@@ -164,6 +175,37 @@ def verify_traffic(port):
         assert second.recv(65536) == b"second", "UDP 客户端响应错配"
         first.sendto(b"", ("127.0.0.1", port))
         assert first.recv(65536) == b"", "UDP 零长度报文丢失"
+
+
+def verify_traffic(port):
+    verify_tcp(port)
+    verify_udp(port)
+
+
+def verify_stopped(port, protocols=("tcp", "udp")):
+    if "tcp" in protocols:
+        try:
+            client = socket.create_connection(("127.0.0.1", port), timeout=1)
+        except OSError:
+            pass
+        else:
+            client.close()
+            raise AssertionError("规则停止后 TCP 仍可连接")
+    if "udp" in protocols:
+        with socket.socket(type=socket.SOCK_DGRAM) as client:
+            client.settimeout(0.3)
+            client.sendto(b"should-not-echo", ("127.0.0.1", port))
+            try:
+                client.recv(65536)
+            except socket.timeout:
+                pass
+            else:
+                raise AssertionError("规则停止后 UDP 仍在转发")
+
+
+def rule_input(rule, **changes):
+    fields = ("name", "protocol", "listen_host", "listen_port", "target_host", "target_port", "enabled")
+    return {**{key: rule[key] for key in fields}, **changes}
 
 
 def main():
@@ -243,7 +285,66 @@ def main():
                 revision=rule["revision"], status=204,
             )
         assert panel.request("GET", "/api/rules")["rules"] == []
-        print("容器验证通过：内嵌前端、认证、低端口、TCP/UDP 收发、重建恢复及删除")
+        verify_stopped(listen_port)
+
+        combined = panel.request(
+            "POST", "/api/rules",
+            {
+                "name": "容器组合验证", "protocol": "tcp+udp",
+                "listen_host": "127.0.0.1", "listen_port": listen_port,
+                "target_host": "127.0.0.1", "target_port": echoes.tcp.getsockname()[1],
+                "enabled": True,
+            }, status=201,
+        )
+        assert panel.request("GET", "/api/rules")["rules"] == [combined], "组合规则必须只保存一条"
+        verify_traffic(listen_port)
+        docker("stop", "--time", "10", name)
+        docker("rm", name)
+        start()
+        panel = Panel(http_port)
+        panel.ready()
+        panel.login()
+        rules = panel.request("GET", "/api/rules")["rules"]
+        assert len(rules) == 1, "组合规则重建后被拆成多条"
+        restored = rules[0]
+        assert restored["id"] == combined["id"] and restored["revision"] == combined["revision"]
+        assert restored["protocol"] == "tcp+udp" and restored["status"] == "running"
+        verify_traffic(listen_port)
+        for enabled in (False, True):
+            restored = panel.request(
+                "PUT", f'/api/rules/{restored["id"]}',
+                rule_input(restored, enabled=enabled), revision=restored["revision"],
+            )
+            if enabled:
+                verify_traffic(listen_port)
+            else:
+                assert restored["status"] == "disabled"
+                verify_stopped(listen_port)
+        restored = panel.request(
+            "PUT", f'/api/rules/{restored["id"]}',
+            rule_input(restored, protocol="tcp"), revision=restored["revision"],
+        )
+        verify_tcp(listen_port)
+        verify_stopped(listen_port, ("udp",))
+        restored = panel.request(
+            "PUT", f'/api/rules/{restored["id"]}',
+            rule_input(restored, protocol="tcp+udp"), revision=restored["revision"],
+        )
+        verify_traffic(listen_port)
+        panel.request("DELETE", f'/api/rules/{restored["id"]}', revision=restored["revision"], status=204)
+        assert panel.request("GET", "/api/rules")["rules"] == []
+        verify_stopped(listen_port)
+        # 删除组合规则后重新绑定两类单协议，确认两个低端口监听均已释放。
+        for protocol in ("tcp", "udp"):
+            rebound = panel.request(
+                "POST", "/api/rules", rule_input(restored, protocol=protocol), status=201,
+            )
+            if protocol == "tcp":
+                verify_tcp(listen_port)
+            else:
+                verify_udp(listen_port)
+            panel.request("DELETE", f'/api/rules/{rebound["id"]}', revision=rebound["revision"], status=204)
+        print("容器验证通过：认证、低端口、单协议与单条 TCP+UDP 真实收发、重建恢复、组合启停/切换及删除释放")
     except Exception:
         logs = docker("logs", name, check=False)
         print(logs.stdout + logs.stderr, file=sys.stderr)

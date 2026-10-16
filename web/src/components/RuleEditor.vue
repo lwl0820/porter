@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, reactive, ref } from "vue";
 import { ApiError, errorMessage } from "../api";
+import { protocols, protocolDetails } from "../types";
 import type { FieldErrors, Rule, RuleInput } from "../types";
 import Modal from "./Modal.vue";
 import Icon from "./Icon.vue";
@@ -154,24 +155,22 @@ async function submit(): Promise<void> {
               role="group"
               aria-labelledby="protocol-label"
             >
-              <label :class="{ selected: form.protocol === 'tcp' }"
-                ><input
+              <label
+                v-for="value in protocols"
+                :key="value"
+                :class="{ selected: form.protocol === value }"
+              >
+                <input
                   v-model="form.protocol"
                   type="radio"
                   name="protocol"
-                  value="tcp" /><strong>TCP</strong><span>可靠的连接传输</span
-                ><Icon
-                  v-if="form.protocol === 'tcp'"
-                  name="check"
-                  :size="17" /></label
-              ><label :class="{ selected: form.protocol === 'udp' }"
-                ><input
-                  v-model="form.protocol"
-                  type="radio"
-                  name="protocol"
-                  value="udp" /><strong>UDP</strong><span>轻量的数据报传输</span
-                ><Icon v-if="form.protocol === 'udp'" name="check" :size="17"
-              /></label>
+                  :value="value"
+                  :aria-label="protocolDetails[value].label"
+                />
+                <strong>{{ protocolDetails[value].label }}</strong>
+                <span>{{ protocolDetails[value].description }}</span>
+                <Icon v-if="form.protocol === value" name="check" :size="17" />
+              </label>
             </div>
           </div>
           <div class="form-section-label">

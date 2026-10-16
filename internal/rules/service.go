@@ -41,7 +41,8 @@ type Service struct {
 	repo      Repository
 	engine    *forward.Engine
 	items     map[string]model.Rule
-	running   map[string]*forward.Runtime
+	running   map[string]*runtimeGroup
+	monitors  sync.WaitGroup
 	adminHost netip.Addr
 	adminPort int
 	closed    bool
@@ -64,7 +65,7 @@ func New(ctx context.Context, repo Repository, engine *forward.Engine, adminAddr
 	if err != nil {
 		return nil, fmt.Errorf("管理监听地址必须是 IP：%w", err)
 	}
-	s := &Service{repo: repo, engine: engine, items: make(map[string]model.Rule), running: make(map[string]*forward.Runtime), adminHost: addr.Unmap(), adminPort: port}
+	s := &Service{repo: repo, engine: engine, items: make(map[string]model.Rule), running: make(map[string]*runtimeGroup), adminHost: addr.Unmap(), adminPort: port}
 	items, err := repo.List(ctx)
 	if err != nil {
 		return nil, err
@@ -72,6 +73,7 @@ func New(ctx context.Context, repo Repository, engine *forward.Engine, adminAddr
 	for _, r := range items {
 		s.items[r.ID] = r
 	}
+	s.mu.Lock()
 	for _, r := range items {
 		if !r.Enabled {
 			continue
@@ -81,21 +83,21 @@ func New(ctx context.Context, repo Repository, engine *forward.Engine, adminAddr
 			s.setError(r, err)
 			continue
 		}
-		rt, e := engine.Prepare(r)
+		group, e := s.prepareGroup(r, nil)
 		if e != nil {
 			s.setError(r, e)
 			continue
 		}
-		s.running[r.ID] = rt
-		rt.Start()
+		s.startGroup(r.ID, group)
 	}
+	s.mu.Unlock()
 	return s, nil
 }
 
 func (s *Service) setError(r model.Rule, err error) {
 	r.Status = "error"
 	r.LastErrorCode = "listen_failed"
-	r.LastError = "监听失败，请检查地址、端口占用和权限"
+	r.LastError = listenerMessage(err)
 	s.items[r.ID] = r
 	slog.Error("规则恢复失败", "rule_id", r.ID, "error", err)
 }
@@ -123,15 +125,14 @@ func (s *Service) view(r model.Rule) model.Rule {
 		r.LastErrorCode = ""
 		return r
 	}
-	if rt := s.running[r.ID]; rt != nil {
-		if err := rt.Error(); err == nil {
+	if group := s.running[r.ID]; group != nil {
+		if err := group.failure(); err == nil {
 			r.Status = "running"
 			r.LastError = ""
 			r.LastErrorCode = ""
 		} else {
-			r.Status = "error"
-			r.LastErrorCode = "listen_failed"
-			r.LastError = "监听器异常，请重试"
+			s.failGroup(r, group, err)
+			r = s.items[r.ID]
 		}
 	}
 	if r.Status == "" {
@@ -178,40 +179,51 @@ func (s *Service) Save(ctx context.Context, id string, revision int64, input mod
 		r.ID = hex.EncodeToString(b[:])
 		r.CreatedAt = now
 	}
-	rt := s.running[id]
-	same := rt != nil && rt.Error() == nil && old.Protocol == r.Protocol && old.ListenHost == r.ListenHost && old.ListenPort == r.ListenPort
-	var prepared *forward.Runtime
-	if r.Enabled && !same {
-		prepared, err = s.engine.Prepare(r)
+	previous := s.running[id]
+	if previous != nil {
+		if fault := previous.failure(); fault != nil {
+			s.failGroup(old, previous, fault)
+			previous = nil
+		}
+	}
+	var reusable *runtimeGroup
+	if previous != nil && old.ListenHost == r.ListenHost && old.ListenPort == r.ListenPort {
+		reusable = previous
+	}
+	var prepared *runtimeGroup
+	if r.Enabled {
+		prepared, err = s.prepareGroup(r, reusable)
 		if err != nil {
 			slog.Warn("规则监听准备失败", "rule_id", id, "error", err)
-			return model.Rule{}, problem(409, "listen_conflict", "无法监听此地址和端口，请检查占用、权限；更改重叠地址时请先停用规则")
+			return model.Rule{}, problem(409, "listen_conflict", listenerMessage(err)+"；更改重叠地址时请先停用规则")
 		}
 	}
 	if err = s.repo.Save(ctx, r, create); err != nil {
-		if prepared != nil {
-			prepared.Stop()
-		}
+		releaseAdded(prepared, previous)
 		slog.Error("规则保存失败", "rule_id", id, "error", err)
 		return model.Rule{}, problem(500, "database_error", "规则保存失败，原配置保持不变")
 	}
-	if r.Enabled {
-		if prepared != nil {
-			if rt != nil {
+	if previous != nil {
+		previous.retire()
+		for transport, rt := range previous.members {
+			if prepared == nil || prepared.members[transport] != rt {
 				rt.Stop()
 			}
-			s.running[r.ID] = prepared
-			prepared.Start()
-		} else if old.TargetHost != r.TargetHost || old.TargetPort != r.TargetPort {
-			rt.Update(r)
 		}
-	} else {
-		if rt != nil {
-			rt.Stop()
-		}
-		delete(s.running, id)
 	}
+	delete(s.running, id)
 	s.items[r.ID] = r
+	if prepared != nil {
+		reset := old.Protocol != r.Protocol || old.TargetHost != r.TargetHost || old.TargetPort != r.TargetPort
+		if reset && previous != nil {
+			for transport, rt := range prepared.members {
+				if previous.members[transport] == rt {
+					rt.Update(physicalRule(r, transport))
+				}
+			}
+		}
+		s.startGroup(r.ID, prepared)
+	}
 	slog.Info("规则已保存", "rule_id", r.ID, "enabled", r.Enabled, "revision", r.Revision)
 	return s.view(r), nil
 }
@@ -233,8 +245,8 @@ func (s *Service) Delete(ctx context.Context, id string, revision int64) error {
 		slog.Error("删除规则失败", "rule_id", id, "error", err)
 		return problem(500, "database_error", "删除失败，规则保持不变")
 	}
-	if rt := s.running[id]; rt != nil {
-		rt.Stop()
+	if group := s.running[id]; group != nil {
+		group.stop()
 	}
 	delete(s.running, id)
 	delete(s.items, id)
@@ -258,31 +270,35 @@ func (s *Service) Retry(id string, revision int64) (model.Rule, error) {
 	if !r.Enabled {
 		return model.Rule{}, problem(409, "disabled", "请先启用规则")
 	}
-	if rt := s.running[id]; rt != nil {
-		if rt.Error() == nil {
+	if group := s.running[id]; group != nil {
+		if group.failure() == nil {
 			return s.view(r), nil
 		}
-		rt.Stop()
+		group.stop()
 		delete(s.running, id)
 	}
-	rt, err := s.engine.Prepare(r)
+	in := model.Input{Name: r.Name, Protocol: r.Protocol, ListenHost: r.ListenHost, ListenPort: r.ListenPort, TargetHost: r.TargetHost, TargetPort: r.TargetPort, Enabled: &r.Enabled}
+	if _, err := s.validate(in, id); err != nil {
+		return model.Rule{}, err
+	}
+	group, err := s.prepareGroup(r, nil)
 	if err != nil {
 		s.setError(r, err)
-		return s.view(s.items[id]), problem(409, "listen_conflict", "重试失败，请检查地址、端口占用和权限")
+		return s.view(s.items[id]), problem(409, "listen_conflict", listenerMessage(err))
 	}
-	s.running[id] = rt
-	rt.Start()
+	s.startGroup(id, group)
 	return s.view(r), nil
 }
 
 func (s *Service) Close() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.closed = true
-	for id, rt := range s.running {
-		rt.Stop()
+	for id, group := range s.running {
+		group.stop()
 		delete(s.running, id)
 	}
+	s.mu.Unlock()
+	s.monitors.Wait()
 }
 
 func (s *Service) validate(in model.Input, id string) (model.Rule, error) {
@@ -294,8 +310,8 @@ func (s *Service) validate(in model.Input, id string) (model.Rule, error) {
 	if n := utf8.RuneCountInString(r.Name); n < 1 || n > 80 || !utf8.ValidString(r.Name) {
 		fields["name"] = "名称需要 1–80 个字符"
 	}
-	if r.Protocol != "tcp" && r.Protocol != "udp" {
-		fields["protocol"] = "请选择 TCP 或 UDP"
+	if len(model.Transports(r.Protocol)) == 0 {
+		fields["protocol"] = "请选择 TCP、UDP 或 TCP+UDP"
 	}
 	a, err := netip.ParseAddr(r.ListenHost)
 	if err != nil || a.Zone() != "" {
@@ -325,16 +341,17 @@ func (s *Service) validate(in model.Input, id string) (model.Rule, error) {
 	if len(fields) > 0 {
 		return r, &Error{Status: 400, Code: "validation_error", Message: "请检查表单内容", Fields: fields}
 	}
-	if r.Protocol == "tcp" && r.ListenPort == s.adminPort && overlap(a, s.adminHost) {
-		return r, problem(409, "admin_conflict", "监听地址与面板管理端口冲突")
+	if model.HasTransport(r.Protocol, model.ProtocolTCP) && r.ListenPort == s.adminPort && overlap(a, s.adminHost) {
+		return r, problem(409, "admin_conflict", "TCP 监听地址与面板管理端口冲突")
 	}
 	for otherID, other := range s.items {
-		if otherID == id || other.Protocol != r.Protocol || other.ListenPort != r.ListenPort {
+		common := model.CommonTransport(r.Protocol, other.Protocol)
+		if otherID == id || common == "" || other.ListenPort != r.ListenPort {
 			continue
 		}
 		b, e := netip.ParseAddr(other.ListenHost)
 		if e == nil && overlap(a, b) {
-			return r, problem(409, "rule_conflict", "此协议的监听地址和端口已被规则使用")
+			return r, problem(409, "rule_conflict", strings.ToUpper(common)+" 监听地址和端口已被规则使用")
 		}
 	}
 	if target, e := netip.ParseAddr(r.TargetHost); e == nil && r.ListenPort == r.TargetPort && localAddress(target) && overlap(a, target) {

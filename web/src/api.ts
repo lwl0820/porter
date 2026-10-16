@@ -1,3 +1,4 @@
+import { isProtocol } from "./types";
 import type { FieldErrors, Rule, RuleInput, Session } from "./types";
 
 export class ApiError extends Error {
@@ -42,7 +43,7 @@ function decodeRule(value: unknown): Rule {
     !record(value) ||
     typeof value.id !== "string" ||
     typeof value.name !== "string" ||
-    !["tcp", "udp"].includes(String(value.protocol)) ||
+    !isProtocol(value.protocol) ||
     typeof value.listen_host !== "string" ||
     typeof value.target_host !== "string" ||
     !Number.isInteger(value.listen_port) ||

@@ -15,7 +15,12 @@ import (
 )
 
 //go:embed migrations/001_init.sql
-var migration string
+var initialMigration string
+
+//go:embed migrations/002_tcp_udp.sql
+var combinedMigration string
+
+var migrations = []string{initialMigration, combinedMigration}
 
 type Store struct {
 	db   *sql.DB
@@ -55,32 +60,104 @@ func Open(path string) (*Store, error) {
 			return nil, err
 		}
 	}
-	var version int
-	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+	if err = migrate(ctx, db); err != nil {
 		s.Close()
 		return nil, err
 	}
-	if version > 1 {
-		s.Close()
-		return nil, fmt.Errorf("数据库版本 %d 高于当前程序支持的版本，禁止降级打开", version)
-	}
-	if version == 0 {
-		tx, e := db.BeginTx(ctx, nil)
-		if e != nil {
-			s.Close()
-			return nil, e
-		}
-		if _, e = tx.ExecContext(ctx, migration); e != nil {
-			tx.Rollback()
-			s.Close()
-			return nil, e
-		}
-		if e = tx.Commit(); e != nil {
-			s.Close()
-			return nil, e
-		}
-	}
 	return s, nil
+}
+
+func migrate(ctx context.Context, db *sql.DB) error {
+	var version int
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if version > len(migrations) || version < 0 {
+		return fmt.Errorf("数据库版本 %d 不在当前程序支持的范围内，禁止降级打开", version)
+	}
+	for version < len(migrations) {
+		if err := applyMigration(ctx, db, version+1); err != nil {
+			return fmt.Errorf("数据库迁移到版本 %d 失败：%w", version+1, err)
+		}
+		version++
+	}
+	return nil
+}
+
+func applyMigration(ctx context.Context, db *sql.DB, version int) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var objects []string
+	if version == 2 {
+		objects, err = tableObjects(ctx, tx)
+		if err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, migrations[version-1]); err != nil {
+		return err
+	}
+	for _, statement := range objects {
+		if _, err = tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("恢复 rules 附属对象失败：%w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// tableObjects 在删除旧表前保存附属对象；遇到无法无损处理的自定义结构则拒绝迁移。
+func tableObjects(ctx context.Context, tx *sql.Tx) ([]string, error) {
+	columns, err := tx.QueryContext(ctx, "SELECT name FROM pragma_table_xinfo('rules') ORDER BY cid")
+	if err != nil {
+		return nil, err
+	}
+	expected := []string{"id", "name", "protocol", "listen_host", "listen_port", "target_host", "target_port", "enabled", "revision", "created_at", "updated_at"}
+	var names []string
+	for columns.Next() {
+		var name string
+		if err = columns.Scan(&name); err != nil {
+			columns.Close()
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	err = columns.Err()
+	columns.Close()
+	if err != nil {
+		return nil, err
+	}
+	if len(names) != len(expected) {
+		return nil, fmt.Errorf("rules 表字段与版本 1 不一致，无法安全迁移")
+	}
+	for i, name := range names {
+		if name != expected[i] {
+			return nil, fmt.Errorf("rules 表字段与版本 1 不一致，无法安全迁移")
+		}
+	}
+	var references int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema AS s JOIN pragma_foreign_key_list(s.name) AS f WHERE s.type='table' AND (lower(f."table")='rules' OR lower(s.name)='rules')`).Scan(&references); err != nil {
+		return nil, err
+	}
+	if references != 0 {
+		return nil, fmt.Errorf("存在涉及 rules 的外键，无法安全重建规则表")
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT sql FROM sqlite_schema WHERE tbl_name='rules' AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY type,name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var objects []string
+	for rows.Next() {
+		var statement string
+		if err = rows.Scan(&statement); err != nil {
+			return nil, err
+		}
+		objects = append(objects, statement)
+	}
+	return objects, rows.Err()
 }
 
 func (s *Store) Close() error                   { err := s.db.Close(); s.lock.Close(); return err }

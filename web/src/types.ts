@@ -1,4 +1,47 @@
-export type Protocol = "tcp" | "udp";
+export const protocols = ["tcp", "udp", "tcp+udp"] as const;
+export type Protocol = (typeof protocols)[number];
+
+export const protocolDetails: Record<
+  Protocol,
+  {
+    label: string;
+    description: string;
+    className: string;
+    icon: string;
+  }
+> = {
+  tcp: {
+    label: "TCP",
+    description: "可靠的连接传输",
+    className: "tcp",
+    icon: "arrows",
+  },
+  udp: {
+    label: "UDP",
+    description: "轻量的数据报传输",
+    className: "udp",
+    icon: "network",
+  },
+  "tcp+udp": {
+    label: "TCP+UDP",
+    description: "同时转发两种协议",
+    className: "both",
+    icon: "layers",
+  },
+};
+
+export function isProtocol(value: unknown): value is Protocol {
+  return protocols.some((protocol) => protocol === value);
+}
+
+export function matchesProtocol(
+  value: Protocol,
+  filter: Protocol | "",
+): boolean {
+  return (
+    !filter || value === filter || (value === "tcp+udp" && filter !== "tcp+udp")
+  );
+}
 export type RuleStatus = "running" | "disabled" | "error";
 
 export interface RuleInput {

@@ -3,6 +3,9 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { api, ApiError, errorMessage, onUnauthorized, setSession } from "./api";
 import {
   address,
+  matchesProtocol,
+  protocolDetails,
+  type Protocol,
   ruleInput,
   statusLabels,
   type Rule,
@@ -31,7 +34,7 @@ const actionError = ref("");
 const announcement = ref("");
 const search = ref("");
 const searchInput = ref<HTMLInputElement>();
-const protocol = ref("");
+const protocol = ref<Protocol | "">("");
 const status = ref("");
 const editorOpen = ref(false);
 const editingRule = ref<Rule>();
@@ -56,7 +59,7 @@ const filteredRules = computed(() => {
   const query = search.value.trim().toLocaleLowerCase();
   return rules.value.filter(
     (rule) =>
-      (!protocol.value || rule.protocol === protocol.value) &&
+      matchesProtocol(rule.protocol, protocol.value) &&
       (!status.value || rule.status === status.value) &&
       (!query ||
         `${rule.name} ${rule.listen_host} ${rule.listen_port} ${rule.target_host} ${rule.target_port}`
@@ -310,20 +313,14 @@ onUnmounted(() => {
 <template>
   <div v-if="booting || bootError" class="startup-screen">
     <div class="brand-mark"><Icon name="arrows" :size="28" /></div>
-    <template v-if="booting"
-      >
-<span class="spinner" />
+    <template v-if="booting">
+      <span class="spinner" />
       <p>正在连接 Porter…</p>
-</template
-    >
-    <template v-else
-      >
-<p role="alert">{{ bootError }}</p>
-      <button class="button primary" @click="initialize">
-        重新连接
-      </button>
-</template
-    >
+    </template>
+    <template v-else>
+      <p role="alert">{{ bootError }}</p>
+      <button class="button primary" @click="initialize">重新连接</button>
+    </template>
   </div>
 
   <main v-else-if="!session" class="login-page">
@@ -550,6 +547,7 @@ onUnmounted(() => {
               <option value="">全部协议</option>
               <option value="tcp">TCP</option>
               <option value="udp">UDP</option>
+              <option value="tcp+udp">TCP+UDP</option>
 </select
             ><select v-model="status" aria-label="按状态筛选">
               <option value="">全部状态</option>
@@ -584,22 +582,19 @@ onUnmounted(() => {
           </button>
         </div>
         <div v-if="!loaded" class="empty-state">
-          <template v-if="loading"
-            >
-<span class="spinner" />
+          <template v-if="loading">
+            <span class="spinner" />
             <h3>正在加载规则</h3>
             <p>稍等片刻，正在同步你的转发配置。</p>
 </template
-          ><template v-else
-            >
-<span class="empty-icon"><Icon name="alert" :size="29" /></span>
+          ><template v-else>
+            <span class="empty-icon"><Icon name="alert" :size="29" /></span>
             <h3>暂时无法获取规则</h3>
             <p>请检查网络连接，然后重新尝试。</p>
             <button class="button secondary" @click="loadRules">
               重新加载
             </button>
-</template
-          >
+          </template>
         </div>
         <template v-else-if="filteredRules.length">
           <div class="desktop-table">
@@ -618,16 +613,20 @@ onUnmounted(() => {
               <tbody>
                 <tr v-for="rule in filteredRules" :key="rule.id">
                   <td class="rule-name-cell">
-                    <span class="rule-avatar" :class="rule.protocol"
+                    <span
+                      class="rule-avatar"
+                      :class="protocolDetails[rule.protocol].className"
                       ><Icon
-                        :name="rule.protocol === 'tcp' ? 'arrows' : 'network'"
+                        :name="protocolDetails[rule.protocol].icon"
                         :size="18" /></span
                     ><strong :title="rule.name">{{ rule.name }}</strong>
                   </td>
                   <td>
-                    <span class="protocol-badge" :class="rule.protocol">{{
-                      rule.protocol.toUpperCase()
-                    }}</span>
+                    <span
+                      class="protocol-badge"
+                      :class="protocolDetails[rule.protocol].className"
+                      >{{ protocolDetails[rule.protocol].label }}</span
+                    >
                   </td>
                   <td class="address-cell">
                     <code
@@ -683,13 +682,19 @@ onUnmounted(() => {
             >
               <div class="rule-card-title">
                 <h3>
-                  <span class="rule-avatar" :class="rule.protocol"
-                    ><Icon name="arrows" :size="17" /></span
+                  <span
+                    class="rule-avatar"
+                    :class="protocolDetails[rule.protocol].className"
+                    ><Icon
+                      :name="protocolDetails[rule.protocol].icon"
+                      :size="17" /></span
                   >{{ rule.name }}
                 </h3>
-                <span class="protocol-badge" :class="rule.protocol">{{
-                  rule.protocol.toUpperCase()
-                }}</span>
+                <span
+                  class="protocol-badge"
+                  :class="protocolDetails[rule.protocol].className"
+                  >{{ protocolDetails[rule.protocol].label }}</span
+                >
               </div>
               <div class="mobile-route">
                 <div>
@@ -773,14 +778,12 @@ onUnmounted(() => {
       <span>Porter<span class="brand-period">.</span></span
       ><span>让连接井然有序</span><span>TCP / UDP</span>
     </footer>
-    <Transition name="toast"
-      >
-<div v-if="announcement" role="status" class="toast-notice">
+    <Transition name="toast">
+      <div v-if="announcement" role="status" class="toast-notice">
         <span class="toast-icon"><Icon name="check" :size="17" /></span
         >{{ announcement }}
       </div>
-</Transition
-    >
+    </Transition>
     <RuleEditor
       v-if="editorOpen"
       :rule="editingRule"
@@ -793,8 +796,8 @@ onUnmounted(() => {
       label="删除规则"
       :busy="Boolean(busy)"
       @close="deletingRule = undefined"
-      >
-<div class="delete-dialog">
+    >
+      <div class="delete-dialog">
         <span class="delete-icon"><Icon name="trash" :size="26" /></span>
         <h2>删除这条规则？</h2>
         <p>
@@ -832,7 +835,6 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
-</Modal
-    >
+    </Modal>
   </div>
 </template>

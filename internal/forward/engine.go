@@ -23,8 +23,17 @@ type Limits struct {
 }
 
 type Engine struct {
-	limits Limits
-	active atomic.Int64
+	limits  Limits
+	active  atomic.Int64
+	mu      sync.Mutex
+	budgets map[string]*ruleBudget
+}
+
+// ruleBudget 由同一逻辑规则的全部预备与运行实例共享，字段统一受 Engine.mu 保护。
+type ruleBudget struct {
+	id     string
+	refs   int
+	active int
 }
 
 func New(limits Limits) *Engine {
@@ -40,7 +49,48 @@ func New(limits Limits) *Engine {
 	if limits.DialTimeout <= 0 {
 		limits.DialTimeout = 5 * time.Second
 	}
-	return &Engine{limits: limits}
+	return &Engine{limits: limits, budgets: make(map[string]*ruleBudget)}
+}
+
+func (e *Engine) retainBudget(id string) *ruleBudget {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	budget := e.budgets[id]
+	if id == "" || budget == nil {
+		budget = &ruleBudget{id: id}
+		if id != "" {
+			e.budgets[id] = budget
+		}
+	}
+	budget.refs++
+	return budget
+}
+
+func (e *Engine) releaseBudget(budget *ruleBudget) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	budget.refs--
+	if budget.refs == 0 && budget.id != "" {
+		delete(e.budgets, budget.id)
+	}
+}
+
+func (e *Engine) reserveSession(budget *ruleBudget) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if budget.active >= e.limits.PerRule || e.active.Load() >= int64(e.limits.Global) {
+		return false
+	}
+	budget.active++
+	e.active.Add(1)
+	return true
+}
+
+func (e *Engine) releaseSession(budget *ruleBudget) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	budget.active--
+	e.active.Add(-1)
 }
 
 type generation struct {
@@ -58,19 +108,21 @@ func newGeneration(rule model.Rule) *generation {
 }
 
 type Runtime struct {
-	engine   *Engine
-	op       sync.Mutex
-	mu       sync.Mutex
-	current  *generation
-	tcp      *net.TCPListener
-	udp      *net.UDPConn
-	started  bool
-	stopped  bool
-	err      error
-	loops    sync.WaitGroup
-	lastLog  time.Time
-	active   int
-	udpWrite sync.Mutex
+	engine       *Engine
+	budget       *ruleBudget
+	op           sync.Mutex
+	mu           sync.Mutex
+	current      *generation
+	tcp          *net.TCPListener
+	udp          *net.UDPConn
+	started      bool
+	stopped      bool
+	err          error
+	failedSignal chan struct{}
+	loops        sync.WaitGroup
+	lastLog      time.Time
+	active       int
+	udpWrite     sync.Mutex
 }
 
 // Prepare 只占用监听端口；提交持久化配置后调用 Start 才开始处理数据。
@@ -84,7 +136,7 @@ func (e *Engine) Prepare(rule model.Rule) (*Runtime, error) {
 		family = "4"
 	}
 	address := net.JoinHostPort(rule.ListenHost, strconv.Itoa(rule.ListenPort))
-	r := &Runtime{engine: e, current: newGeneration(rule)}
+	r := &Runtime{engine: e, current: newGeneration(rule), failedSignal: make(chan struct{})}
 	var err error
 	switch rule.Protocol {
 	case "tcp":
@@ -106,6 +158,7 @@ func (e *Engine) Prepare(rule model.Rule) (*Runtime, error) {
 		r.current.cancel()
 		return nil, fmt.Errorf("无法监听 %s: %w", address, err)
 	}
+	r.budget = e.retainBudget(rule.ID)
 	return r, nil
 }
 
@@ -163,6 +216,7 @@ func (r *Runtime) Stop() {
 	}
 	r.drain(g)
 	r.loops.Wait()
+	r.engine.releaseBudget(r.budget)
 }
 
 func (r *Runtime) Error() error {
@@ -170,6 +224,10 @@ func (r *Runtime) Error() error {
 	defer r.mu.Unlock()
 	return r.err
 }
+
+// Failed 只在监听发生不可恢复故障时关闭；正常停止不触发故障通知。
+// 调用方收到通知后可安全调用 Error，并由独立协程协调组内 Stop。
+func (r *Runtime) Failed() <-chan struct{} { return r.failedSignal }
 
 func (r *Runtime) drain(g *generation) {
 	r.mu.Lock()
@@ -186,11 +244,12 @@ func (r *Runtime) drain(g *generation) {
 
 func (r *Runtime) failed(err error) {
 	r.mu.Lock()
-	if r.stopped {
+	if r.stopped || r.err != nil {
 		r.mu.Unlock()
 		return
 	}
 	r.err = fmt.Errorf("监听器故障: %w", err)
+	close(r.failedSignal)
 	g := r.current
 	g.cancel()
 	r.mu.Unlock()
@@ -206,17 +265,8 @@ func (r *Runtime) failed(err error) {
 
 // reserve 在运行态锁内分配额度与登记会话，避免关闭与 WaitGroup.Add 交错。
 func (r *Runtime) reserve(g *generation, key string, client net.Conn, peer *net.UDPAddr) *session {
-	if r.active >= r.engine.limits.PerRule {
+	if !r.engine.reserveSession(r.budget) {
 		return nil
-	}
-	for {
-		n := r.engine.active.Load()
-		if n >= int64(r.engine.limits.Global) {
-			return nil
-		}
-		if r.engine.active.CompareAndSwap(n, n+1) {
-			break
-		}
 	}
 	s := &session{runtime: r, generation: g, client: client, peer: peer, key: key, packets: make(chan []byte, 64), done: make(chan struct{})}
 	g.sessions[s] = struct{}{}
@@ -290,7 +340,7 @@ func (s *session) finish() {
 		delete(g.udp, s.key)
 	}
 	r.mu.Unlock()
-	r.engine.active.Add(-1)
+	r.engine.releaseSession(r.budget)
 	g.wg.Done()
 }
 

@@ -55,7 +55,7 @@ func testRuntime(t *testing.T, e *Engine, protocol, host string, target net.Addr
 		t.Fatal(err)
 	}
 	port, _ := strconv.Atoi(targetPort)
-	r, err := e.Prepare(model.Rule{ID: "测试规则", Protocol: protocol, ListenHost: host, TargetHost: targetHost, TargetPort: port})
+	r, err := e.Prepare(model.Rule{Protocol: protocol, ListenHost: host, TargetHost: targetHost, TargetPort: port})
 	if err != nil {
 		t.Fatal(err)
 	}

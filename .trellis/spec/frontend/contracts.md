@@ -7,7 +7,7 @@
 ## 2. 签名与模块职责
 
 - `src/api.ts`：唯一 fetch 与运行时响应校验边界，导出 `api`、`ApiError`、`setSession`。
-- `src/types.ts`：Rule、RuleInput、Session、FieldErrors 契约。
+- `src/types.ts`：Rule、RuleInput、Session、FieldErrors 契约；`protocols`、`protocolDetails`、`isProtocol`、`matchesProtocol` 集中维护协议选项、展示与筛选。
 - `src/App.vue`：登录、列表、搜索筛选、轮询与写操作协调。
 - `src/components/RuleEditor.vue`：规则表单、字段校验、转发变更提示。
 - `src/components/Modal.vue`：原生 dialog、初始焦点与关闭后焦点恢复。
@@ -18,6 +18,8 @@
 所有请求同源，Cookie 不进入 localStorage；登录或会话恢复后保存内存 CSRF token，修改请求通过 `X-CSRF-Token` 发送。PUT、DELETE、重试使用带引号的 `If-Match`。GET 列表解析 `{rules: Rule[]}`，新增和修改解析单条 Rule。
 
 新增和修改只序列化 RuleInput，不能展开完整 Rule 回传元数据。所有 unknown 响应在 api.ts 中校验，组件不重复类型断言。412 提示关闭编辑器并刷新，不静默重试覆盖。
+
+`Protocol = "tcp" | "udp" | "tcp+udp"`，新增与编辑提供三项单选，组合值直接通过一次请求保存同一条规则，不在前端拆成两次请求。列表展示 TCP+UDP、一行、计数一条，编辑回显组合选项，整体启停/删除/重试。TCP 筛选包含 TCP 和组合，UDP 筛选包含 UDP 和组合，TCP+UDP 筛选仅组合。显示名称、图标和 CSS 类由集中元数据取得，组合 CSS 类为 `both`，不能将 `tcp+udp` 直接拼成选择器。
 
 列表每 5 秒同步，隐藏页面暂停；刷新失败保留上次数据并提示。提交期间禁止重复写操作，保存成功关闭编辑器后仍需复位全局 busy，不能依赖子组件卸载后的事件。没有全局状态框架，简单状态放组件内。
 
@@ -35,7 +37,7 @@
 
 ## 5. 正常、基础与异常案例
 
-- 正常：桌面表格与窄屏卡片可完成相同操作；TCP 与 UDP 标签清晰。
+- 正常：桌面表格与窄屏卡片可完成相同操作；TCP、UDP 与 TCP+UDP 标签清晰。桌面协议单选三列，窄屏 TCP/UDP 同行、TCP+UDP 独占下一行。
 - 基础：名称、协议、监听 IP 与端口、目标主机与端口、启用状态组成完整输入。
 - 异常：网络断开后仍可看到之前规则；会话过期不会一直留在不可操作页面。
 - 无障碍：状态包含文字，按钮和表单有可访问名称，原生 dialog 管理焦点，删除默认焦点落在保留操作。
@@ -43,6 +45,8 @@
 ## 6. 必需验证
 
 执行 `npm --prefix web run lint`、`type-check`、`test`、`build`；Vite build 不代替 TypeScript 检查。交互测试位于 `src/App.test.ts`，应以用户行为验证登录、CRUD、提交防重、字段错误、revision、CSRF、隐藏暂停轮询与过期退出。
+
+组合交互测试断言单次新增请求携带 `tcp+udp`、一行一条计数、三种筛选包含关系、编辑回显与协议切换，以及整体启停删除。不因增加协议删除原有 TCP/UDP 用例。
 
 必须实际浏览器检查窄屏。CSS 隐藏文字时，退出和刷新图标按钮必须保留显式 aria-label，不能只靠 SVG 或 title。对最终构建产物再执行 Go 构建，避免并发 npm build 清空 dist 导致 embed 失败。
 
@@ -55,5 +59,9 @@
 错误：窄屏用 `display:none` 隐藏按钮中的 span，却没有 aria-label，导致按钮在辅助功能树中没有名称。
 
 正确：退出按钮使用 `aria-label="退出登录"`，刷新使用 `aria-label="刷新规则"`，并保留相应回归断言。
+
+错误：协议筛选直接使用 `rule.protocol === selectedProtocol`，导致组合规则在 TCP/UDP 下消失。
+
+正确：使用 `matchesProtocol(rule.protocol, selectedProtocol)`，空值包含全部、组合筛选只含组合，单协议筛选同时包含相应单协议和组合。
 
 源码依赖与锁文件同时更新；临时文件、npm 缓存、构建测试输出使用仓库 `.tmp/` 或被忽略的项目子目录，不访问系统临时目录。
