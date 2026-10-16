@@ -1,0 +1,68 @@
+name: 验证
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: 验证 (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      TMPDIR: ${{ github.workspace }}/.tmp/tmp
+      GOTMPDIR: ${{ github.workspace }}/.tmp/tmp
+      GOCACHE: ${{ github.workspace }}/.tmp/go-cache
+      GOPATH: ${{ github.workspace }}/.tmp/go-path
+      GOMODCACHE: ${{ github.workspace }}/.tmp/go-mod
+      npm_config_cache: ${{ github.workspace }}/.tmp/npm-cache
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: 创建工作目录
+        run: mkdir -p "$TMPDIR" "$GOCACHE" "$GOPATH" "$GOMODCACHE" "$npm_config_cache"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.0'
+      - name: 前端质量检查与构建
+        run: |
+          npm --prefix web ci
+          npm --prefix web run lint
+          npm --prefix web run type-check
+          npm --prefix web run test
+          npm --prefix web run build
+      - name: Go 静态检查、竞态与真实网络集成测试
+        run: |
+          go vet ./...
+          go test -race ./...
+          go test -count=1 ./tests/integration/...
+      - name: 校验 Compose 必填密码
+        run: |
+          PORTER_ADMIN_PASSWORD=validation-only docker compose config --quiet
+          if PORTER_ADMIN_PASSWORD= docker compose config --quiet 2>/dev/null; then
+            echo '空密码不应通过 Compose 校验' >&2
+            exit 1
+          fi
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: 构建镜像并验证容器
+        run: |
+          docker build --build-arg VERSION=ci -t porter:ci .
+          python3 scripts/docker-smoke.py porter:ci

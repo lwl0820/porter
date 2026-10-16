@@ -1,0 +1,13 @@
+.tmp/
+.env
+data/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+web/node_modules/
+web/dist/
+web/coverage/
+web/playwright-report/
+web/test-results/
+__pycache__/

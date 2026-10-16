@@ -1,0 +1,15 @@
+services:
+  porter:
+    image: ghcr.io/lwl0820/porter:latest
+    restart: unless-stopped
+    network_mode: host
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    environment:
+      PORTER_ADMIN_USERNAME: admin
+      PORTER_ADMIN_PASSWORD: ${PORTER_ADMIN_PASSWORD:?请先设置 PORTER_ADMIN_PASSWORD}
+    volumes:
+      - porter-data:/data
+
+volumes:
+  porter-data:

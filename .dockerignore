@@ -1,0 +1,13 @@
+**
+!go.mod
+!go.sum
+!cmd/**
+!internal/**
+!web/**
+web/node_modules
+web/dist
+web/.tmp
+web/coverage
+**/.env
+**/*.db
+**/*.db-*
