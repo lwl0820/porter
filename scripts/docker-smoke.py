@@ -40,7 +40,7 @@ class EchoServers:
                 self.tcp.close()
                 self.udp.close()
         else:
-            raise RuntimeError("无法为 TCP/UDP 回显服务分配相同数字端口")
+            raise RuntimeError("Could not allocate the same numeric port for TCP/UDP echo servers")
         self.tcp.listen()
         self.tcp.settimeout(0.2)
         self.udp.settimeout(0.2)
@@ -123,7 +123,7 @@ class Panel:
             expected = (status,) if isinstance(status, int) else status
             if response.status not in expected:
                 raise AssertionError(
-                    f"{method} {path}: 期望 {status}，实际 {response.status}: "
+                    f"{method} {path}: expected {status}, got {response.status}: "
                     + body.decode(errors="replace")
                 )
             if not body:
@@ -141,7 +141,7 @@ class Panel:
             except (OSError, AssertionError, urllib.error.URLError) as error:
                 last_error = error
                 time.sleep(0.1)
-        raise RuntimeError(f"容器未就绪：{last_error}")
+        raise RuntimeError(f"Container did not become ready: {last_error}")
 
     def login(self):
         session = self.request(
@@ -160,7 +160,7 @@ def verify_tcp(port):
         result = bytearray()
         while data := client.recv(65536):
             result.extend(data)
-        assert result == payload, "TCP 半关闭后响应不完整"
+        assert result == payload, "Incomplete TCP response after half-close"
 
 
 def verify_udp(port):
@@ -171,10 +171,10 @@ def verify_udp(port):
         second.settimeout(5)
         first.sendto(b"first", ("127.0.0.1", port))
         second.sendto(b"second", ("127.0.0.1", port))
-        assert first.recv(65536) == b"first", "UDP 客户端响应错配"
-        assert second.recv(65536) == b"second", "UDP 客户端响应错配"
+        assert first.recv(65536) == b"first", "UDP client response mismatch"
+        assert second.recv(65536) == b"second", "UDP client response mismatch"
         first.sendto(b"", ("127.0.0.1", port))
-        assert first.recv(65536) == b"", "UDP 零长度报文丢失"
+        assert first.recv(65536) == b"", "Zero-length UDP datagram was lost"
 
 
 def verify_traffic(port):
@@ -190,7 +190,7 @@ def verify_stopped(port, protocols=("tcp", "udp")):
             pass
         else:
             client.close()
-            raise AssertionError("规则停止后 TCP 仍可连接")
+            raise AssertionError("TCP still accepts connections after the rule stopped")
     if "udp" in protocols:
         with socket.socket(type=socket.SOCK_DGRAM) as client:
             client.settimeout(0.3)
@@ -200,7 +200,7 @@ def verify_stopped(port, protocols=("tcp", "udp")):
             except socket.timeout:
                 pass
             else:
-                raise AssertionError("规则停止后 UDP 仍在转发")
+                raise AssertionError("UDP still forwards traffic after the rule stopped")
 
 
 def rule_input(rule, **changes):
@@ -231,10 +231,10 @@ def main():
         panel = Panel(http_port)
         panel.ready()
         html = panel.request("GET", "/")
-        assert "<html" in html.lower(), "未返回内嵌前端页面"
+        assert "<html" in html.lower(), "Embedded frontend page was not returned"
         asset = re.search(r'src="([^\"]+\.js)"', html)
-        assert asset, "页面缺少前端脚本"
-        assert panel.request("GET", asset.group(1)), "前端脚本为空"
+        assert asset, "Frontend script is missing from the page"
+        assert panel.request("GET", asset.group(1)), "Frontend script is empty"
         panel.request("GET", "/api/rules", status=401)
         panel.login()
         # 宿主测试用户可能无低端口权限，由拥有 capability 的容器尝试实际绑定。
@@ -249,7 +249,7 @@ def main():
                 rule = panel.request(
                     "POST", "/api/rules",
                     {
-                        "name": f"容器验证 {protocol}", "protocol": protocol,
+                        "name": f"Container smoke test {protocol}", "protocol": protocol,
                         "listen_host": "127.0.0.1", "listen_port": listen_port,
                         "target_host": "127.0.0.1", "target_port": target,
                         "enabled": True,
@@ -266,7 +266,7 @@ def main():
                     revision=rule["revision"], status=204,
                 )
         else:
-            raise RuntimeError("容器没有可用于低端口验证的空闲 TCP/UDP 端口")
+            raise RuntimeError("No free TCP/UDP low port is available for the container smoke test")
         verify_traffic(listen_port)
         docker("stop", "--time", "10", name)
         docker("rm", name)
@@ -277,7 +277,7 @@ def main():
         rules = panel.request("GET", "/api/rules")["rules"]
         assert len(rules) == 2 and all(
             rule["status"] == "running" for rule in rules
-        ), "容器重建后规则未恢复"
+        ), "Rules were not restored after container recreation"
         verify_traffic(listen_port)
         for rule in rules:
             panel.request(
@@ -290,13 +290,13 @@ def main():
         combined = panel.request(
             "POST", "/api/rules",
             {
-                "name": "容器组合验证", "protocol": "tcp+udp",
+                "name": "Container combined smoke test", "protocol": "tcp+udp",
                 "listen_host": "127.0.0.1", "listen_port": listen_port,
                 "target_host": "127.0.0.1", "target_port": echoes.tcp.getsockname()[1],
                 "enabled": True,
             }, status=201,
         )
-        assert panel.request("GET", "/api/rules")["rules"] == [combined], "组合规则必须只保存一条"
+        assert panel.request("GET", "/api/rules")["rules"] == [combined], "A combined rule must be stored as one record"
         verify_traffic(listen_port)
         docker("stop", "--time", "10", name)
         docker("rm", name)
@@ -305,7 +305,7 @@ def main():
         panel.ready()
         panel.login()
         rules = panel.request("GET", "/api/rules")["rules"]
-        assert len(rules) == 1, "组合规则重建后被拆成多条"
+        assert len(rules) == 1, "Combined rule was split into multiple records after recreation"
         restored = rules[0]
         assert restored["id"] == combined["id"] and restored["revision"] == combined["revision"]
         assert restored["protocol"] == "tcp+udp" and restored["status"] == "running"
@@ -344,7 +344,7 @@ def main():
             else:
                 verify_udp(listen_port)
             panel.request("DELETE", f'/api/rules/{rebound["id"]}', revision=rebound["revision"], status=204)
-        print("容器验证通过：认证、低端口、单协议与单条 TCP+UDP 真实收发、重建恢复、组合启停/切换及删除释放")
+        print("Container smoke test passed: authentication, low ports, real single-protocol and combined TCP+UDP traffic, recreation recovery, combined enable/disable and protocol changes, and listener release after deletion")
     except Exception:
         logs = docker("logs", name, check=False)
         print(logs.stdout + logs.stderr, file=sys.stderr)

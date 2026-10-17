@@ -1,9 +1,7 @@
-name: 验证
+name: Verify
 
 on:
   pull_request:
-  push:
-    branches: [main]
   workflow_call:
 
 permissions:
@@ -11,7 +9,7 @@ permissions:
 
 jobs:
   verify:
-    name: 验证 (${{ matrix.arch }})
+    name: Verify (${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
@@ -33,7 +31,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: 创建工作目录
+      - name: Create workspace directories
         run: mkdir -p "$TMPDIR" "$GOCACHE" "$GOPATH" "$GOMODCACHE" "$npm_config_cache"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -42,27 +40,27 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.22.0'
-      - name: 前端质量检查与构建
+      - name: Check and build frontend
         run: |
           npm --prefix web ci
           npm --prefix web run lint
           npm --prefix web run type-check
           npm --prefix web run test
           npm --prefix web run build
-      - name: Go 静态检查、竞态与真实网络集成测试
+      - name: Run Go static analysis, race tests, and network integration tests
         run: |
           go vet ./...
           go test -race ./...
           go test -count=1 ./tests/integration/...
-      - name: 校验 Compose 必填密码
+      - name: Validate required Compose password
         run: |
           PORTER_ADMIN_PASSWORD=validation-only docker compose config --quiet
           if PORTER_ADMIN_PASSWORD= docker compose config --quiet 2>/dev/null; then
-            echo '空密码不应通过 Compose 校验' >&2
+            echo 'An empty password must fail Compose validation' >&2
             exit 1
           fi
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: 构建镜像并验证容器
+      - name: Build image and verify container
         run: |
           docker build --build-arg VERSION=ci -t porter:ci .
           python3 scripts/docker-smoke.py porter:ci

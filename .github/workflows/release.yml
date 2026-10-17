@@ -1,23 +1,32 @@
-name: 发布
+name: Publish
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
 
 permissions:
   contents: read
 
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+
 jobs:
   verify:
+    name: Verify
     uses: ./.github/workflows/ci.yml
 
   publish:
+    name: Publish container image
     needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
-      contents: write
+      contents: read
       packages: write
+    outputs:
+      prerelease: ${{ steps.version.outputs.prerelease }}
     env:
       TMPDIR: ${{ github.workspace }}/.tmp/tmp
       GOTMPDIR: ${{ github.workspace }}/.tmp/tmp
@@ -29,27 +38,82 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: 校验标签并生成镜像标签
+      - name: Generate version and image tags
         id: version
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          BUILD_REF: ${{ github.ref }}
+          COMMIT_SHA: ${{ github.sha }}
           REPOSITORY: ${{ github.repository }}
         run: |
           mkdir -p "$TMPDIR" "$GOCACHE" "$GOPATH" "$GOMODCACHE" "$npm_config_cache"
           python3 - <<'PY'
           import os, re
-          tag = os.environ['RELEASE_TAG']
-          if not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?', tag):
-              raise SystemExit('发布标签必须为 vMAJOR.MINOR.PATCH 或对应预发布标签')
-          prerelease = '-' in tag
+          ref = os.environ['BUILD_REF']
           image = 'ghcr.io/' + os.environ['REPOSITORY'].lower()
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('tags<<PORTER_TAGS\n' + image + ':' + tag + '\n')
+          if ref == 'refs/heads/main':
+              version = 'main-' + os.environ['COMMIT_SHA'][:12]
+              tags = [image + ':latest']
+              prerelease = False
+          elif ref.startswith('refs/tags/'):
+              version = ref.removeprefix('refs/tags/')
+              pattern = r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?'
+              match = re.fullmatch(pattern, version)
+              if not match or len(version) > 128:
+                  raise SystemExit('Release tags must use vMAJOR.MINOR.PATCH or a prerelease suffix and fit within 128 characters')
+              suffix = match.group(4)
+              if suffix and any(part.isdigit() and len(part) > 1 and part.startswith('0') for part in suffix.split('.')):
+                  raise SystemExit('Numeric prerelease identifiers must not contain leading zeros')
+              prerelease = suffix is not None
+              tags = [image + ':' + version]
               if not prerelease:
-                  output.write(image + ':latest\n')
-              output.write('PORTER_TAGS\n')
+                  tags.append(image + ':latest')
+          else:
+              raise SystemExit('Image publishing only supports main or version tags')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('tags<<PORTER_TAGS\n' + '\n'.join(tags) + '\nPORTER_TAGS\n')
+              output.write('version=' + version + '\n')
               output.write('prerelease=' + str(prerelease).lower() + '\n')
           PY
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish multi-platform image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.version.outputs.tags }}
+          build-args: VERSION=${{ steps.version.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      TMPDIR: ${{ github.workspace }}/.tmp/tmp
+      GOTMPDIR: ${{ github.workspace }}/.tmp/tmp
+      GOCACHE: ${{ github.workspace }}/.tmp/go-cache
+      GOPATH: ${{ github.workspace }}/.tmp/go-path
+      GOMODCACHE: ${{ github.workspace }}/.tmp/go-mod
+      npm_config_cache: ${{ github.workspace }}/.tmp/npm-cache
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create workspace directories
+        run: mkdir -p "$TMPDIR" "$GOCACHE" "$GOPATH" "$GOMODCACHE" "$npm_config_cache"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.2'
@@ -57,33 +121,15 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.22.0'
-      - name: 编译双架构程序与校验和
+      - name: Build binaries and checksums for both architectures
         env:
           VERSION: ${{ github.ref_name }}
         run: bash scripts/build-release.sh
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: 发布多架构镜像
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.version.outputs.tags }}
-          build-args: VERSION=${{ github.ref_name }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ github.ref_name }}
-      - name: 创建 GitHub Release
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name }}
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          PRERELEASE: ${{ needs.publish.outputs.prerelease }}
         run: |
           args=(--verify-tag --generate-notes)
           if [ "$PRERELEASE" = true ]; then

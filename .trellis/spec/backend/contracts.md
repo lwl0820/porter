@@ -13,6 +13,7 @@
 - `forward.Engine.Prepare(model.Rule) (*Runtime, error)`：只接收物理 TCP 或 UDP 配置，绑定端口但不转发；`Start()`、`Update(rule)`、`Stop()`、`Error()` 分离准备与生效。`Failed() <-chan struct{}` 只通知不可恢复监听故障，正常 Stop 和目标不可达不触发。
 - `rules.runtimeGroup`：每个逻辑规则关联一个运行组，以协议为键持有物理 Runtime；Service 串行控制组的准备、替换、监控和停止。
 - SQL 迁移放在 `internal/store/migrations/` 并内嵌，以 `PRAGMA user_version` 管理。保留 `001_init.sql`；`002_tcp_udp.sql` 将协议 CHECK 扩展为三个值，当前版本为 2。v1→v2 事务复制全部字段并保留自定义索引和触发器；未知列、外部外键依赖或迁移失败须拒绝并回滚，不能静默丢弃。
+- `.github/workflows/ci.yml`：PR 与 `workflow_call` 验证入口；`release.yml`：main push 和 v* tag push 的验证及发布入口。同一次 main 推送只执行一套验证。
 
 ## 3. 请求、响应与环境契约
 
@@ -27,6 +28,8 @@
 写操作由 Service 串行化。先准备新监听，再提交数据库，成功后切换运行态；失败必须关闭预备 socket 并保留旧配置、监听和会话。相同监听器仅修改目标时换代并取消旧会话，只改名称不得重置连接。数据库与 socket 不能被描述为同一原子事务，崩溃后以已提交配置恢复。
 
 协议切换按集合差量准备：监听地址和端口相同的公共成员复用，新成员先绑定，数据库提交后才停止移除成员及原会话。旧组监控先退休，再让新组接管复用成员；故障协程须核对组身份，防止旧通知停止新组。任一预期成员故障须主动停止整组并标错，不依赖列表轮询。监听循环只发通知，由独立协调协程 Stop，避免等待自身；Service.Close 在锁内停止所有组、解锁后等待监控退出。
+
+发布镜像必须依赖双架构验证成功；main 推送无需版本标签即可发布 `ghcr.io/<小写仓库名>:latest`，程序与 OCI version 使用 `main-<提交SHA前12位>`，不创建 GitHub Release。正式 `vMAJOR.MINOR.PATCH` 标签发布版本镜像和 latest；对应预发布标签只发布版本镜像，不覆盖 latest。版本标签发布才编译发行压缩包并创建 Release，且在镜像发布成功后执行。GHCR job 仅使用 `contents:read/packages:write`，Release job 使用 `contents:write`；认证沿用 GITHUB_TOKEN，action 继续固定 SHA。
 
 ## 4. 校验与错误矩阵
 
@@ -43,6 +46,8 @@
 | revision 过期 | 412，不覆盖其他页面的修改。 |
 | 登录限流 | 429，不能信任任意 X-Forwarded-For 来分配限额。 |
 | 持久化失败 | 500，旧配置和原连接不变。 |
+| PR、其他分支推送 | PR 只验证，其他分支无发布入口，不能推镜像或创建 Release。 |
+| main/标签验证失败、版本标签格式非法 | 不发布镜像或 Release，非法版本须在登录 GHCR 前拒绝。 |
 
 目标可离线；`running` 只表示监听正常，不能把目标偶发不可达变成本机监听错误。DNS 解析后、拨号前再次检查自身回环及非法目标。
 
@@ -52,6 +57,7 @@
 - 基础：停用规则保留配置，重启仍停用；启用规则重启逐条恢复。
 - 异常：一条规则端口被外部占用，只有该规则标错；其他规则正常转发，释放占用后可重试。
 - 部署：Linux host 网络、单容器、命名数据卷，删除全部 capability 后仅增加 `NET_BIND_SERVICE`。不能用 privileged 或 `NET_ADMIN` 绕过问题。
+- 发布：main 无 tag 仍产生 latest；正式 v1.0.0 产生版本镜像、latest 和 Release；v1.0.0-rc.1 仅更新对应版本镜像并创建预发行版。latest 不是固定正式版本的保证，固定部署须选具体正式标签。
 
 ## 6. 必需验证
 
@@ -60,6 +66,8 @@
 `internal/rules/combined_test.go` 与 `internal/httpapi/combined_test.go` 以真实 socket 验证六方向协议切换、整体 CRUD、占用/存储失败回滚、名称保留会话和目标变更断开；`runtime_group_test.go` 验证无需查询列表即可停止故障对侧以及并发故障/Close 不死锁。`internal/forward/budget_test.go` 验证跨协议共享额度、预备引用与清理；`internal/store/migration_test.go` 验证 v1 全字段和时间文本无损、失败回滚、索引触发器及组合重开恢复。容器 smoke 验证一条组合记录、低端口双协议、整体操作和重建恢复；升级另用真实 v1 数据卷验证。
 
 先构建 web/dist 再 `go vet ./...`、`go test -race ./...`；无 CGO 二进制另行编译。`scripts/docker-smoke.py` 实测低端口、TCP/UDP 及容器重建。不能把跨架构编译或发行版容器运行当成该架构、发行版宿主的实测。
+
+仅修改 Actions 与辅助脚本提示时，执行 actionlint、Bash/Python 语法及真实嵌入元数据脚本的事件矩阵（main、PR、正式/预发布/非法标签）。核对 needs 验证门禁、Release 条件、标签、双架构与 job 权限；不用重跑未变应用的全套编译测试。未推送并观察远端运行前，不能把静态验证描述为 GHCR 已发布。
 
 ## 7. 错误与正确写法
 
@@ -75,4 +83,8 @@
 
 正确：逻辑上只保存一次 `protocol: "tcp+udp"`；复用公共监听并预备新增成员，提交失败只释放新增成员。回退旧程序须恢复升级前完整数据卷备份，不能对 v2 库自动降级。
 
-所有自写注释、错误文案和内部文档使用中文；Go 工具维护的机械标记不翻译。测试临时目录使用 `internal/testutil.TempDir`，工具缓存和 TMPDIR/GOTMPDIR/GOPATH 均位于仓库 `.tmp/`。
+错误：只为 main 增加一个发布步骤但仍要求合法版本标签，或让 PR 获得发布权限。
+
+正确：按原始 ref 区分 main 与版本标签，main 输出 latest 和提交版本；仅受信任 push 入口调用验证后发布，版本发行步骤以 refs/tags 条件隔离。
+
+所有自写注释、错误文案和内部文档使用中文；GitHub Actions 名称、工作流自有提示及其发布/冒烟脚本可见提示按用户要求使用英文，Go 工具维护的机械标记不翻译。测试临时目录使用 `internal/testutil.TempDir`，工具缓存和 TMPDIR/GOTMPDIR/GOPATH 均位于仓库 `.tmp/`。

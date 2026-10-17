@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 version="${VERSION:-dev}"
 if [[ ! "$version" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-  echo '版本号只能包含字母、数字、点、下划线和连字符' >&2
+  echo 'Version must contain only letters, digits, dots, underscores, and hyphens' >&2
   exit 1
 fi
 export TMPDIR="$PWD/.tmp/tmp" GOTMPDIR="$PWD/.tmp/tmp"
