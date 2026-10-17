@@ -31,6 +31,7 @@ services:
     environment:
       PORTER_ADMIN_USERNAME: admin
       PORTER_ADMIN_PASSWORD: ${PORTER_ADMIN_PASSWORD:?Set PORTER_ADMIN_PASSWORD first}
+      PORTER_HTTP_ADDR: "0.0.0.0:8080"
     volumes:
       - porter-data:/data
 
@@ -50,7 +51,7 @@ docker compose up -d
 docker compose logs -f porter
 ```
 
-Open `http://SERVER_IP:8080` on your trusted management network and sign in as `admin` using your configured password. Change the username directly in `compose.yaml`. Changing credentials requires recreating the container (`docker compose up -d --force-recreate`); existing login sessions expire.
+Open `http://SERVER_IP:8080` on your trusted management network and sign in as `admin` using your configured password. Change the username directly in `compose.yaml`. To use Web port 18080, change `PORTER_HTTP_ADDR` to `"0.0.0.0:18080"`, then access `http://SERVER_IP:18080`. Host networking uses the configured port directly and needs no `ports` mapping.
 
 Allow the management port only from your management network. For management over the internet, use an external HTTPS reverse proxy, bind `PORTER_HTTP_ADDR` to its trusted backend interface, and set `PORTER_COOKIE_SECURE: "true"`. The reverse proxy must preserve the browser-facing `Host` header: Porter compares the request's Origin with Host and does not trust forwarded headers. Business TCP/UDP traffic is encrypted only when its own protocol provides encryption. Allow required forwarding ports in the server firewall and any cloud security group yourself.
 
@@ -58,17 +59,21 @@ The container runs as UID 0 with all capabilities dropped except `NET_BIND_SERVI
 
 ## Configuration
 
+The following table lists all Porter runtime environment variables. Optional variables use their defaults when unset or set to an empty string. Both administrator variables are required: an empty or whitespace-only username or password prevents startup; surrounding whitespace is trimmed from the username. Invalid boolean, address, integer, or duration formats and out-of-range values prevent startup.
+
+To customize any other variable, add it under the service's `environment` in `compose.yaml`, for example `PORTER_UDP_IDLE_TIMEOUT: "2m"`. The adjacent `.env` file supplies values for Compose substitution; placing a variable there alone does not pass it into the container. After changing environment settings, run `docker compose up -d --force-recreate` to apply them. Recreating the container interrupts all forwarding sessions and expires existing login sessions.
+
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
-| `PORTER_ADMIN_USERNAME` | Required | Administrator username; empty values prevent startup. |
-| `PORTER_ADMIN_PASSWORD` | Required | Administrator password; no built-in password. |
+| `PORTER_ADMIN_USERNAME` | Required; no default | Administrator username. |
+| `PORTER_ADMIN_PASSWORD` | Required; no default | Administrator password. |
 | `PORTER_HTTP_ADDR` | `0.0.0.0:8080` | Explicit local IPv4/IPv6 address and port 1–65535, such as `127.0.0.1:8080` or `[::1]:8080`; hostnames are not accepted. |
 | `PORTER_DB_PATH` | `/data/porter.db` | SQLite file path; persist its entire directory. |
-| `PORTER_COOKIE_SECURE` | `false` | Set to `true` when the browser accesses the panel over HTTPS. |
-| `PORTER_MAX_SESSIONS` | `4096` | Global TCP connections and UDP sessions combined. |
-| `PORTER_MAX_SESSIONS_PER_RULE` | `1024` | Combined TCP connection and UDP session limit for each logical rule, including TCP+UDP. |
-| `PORTER_UDP_IDLE_TIMEOUT` | `60s` | UDP session idle timeout, using Go duration syntax. |
-| `PORTER_DIAL_TIMEOUT` | `5s` | Upstream connection timeout, using Go duration syntax. |
+| `PORTER_COOKIE_SECURE` | `false` | Boolean; set to `true` when the browser accesses the panel over HTTPS so login cookies are sent only over HTTPS. |
+| `PORTER_MAX_SESSIONS` | `4096` | Global TCP connection and UDP session limit combined; integer from 1 to 1000000. |
+| `PORTER_MAX_SESSIONS_PER_RULE` | `1024` | TCP connection and UDP session limit combined for each logical rule; integer from 1 to 1000000. TCP+UDP shares this allowance across both protocols. |
+| `PORTER_UDP_IDLE_TIMEOUT` | `60s` | UDP session idle timeout; Go duration from `1ms` to `24h`, for example `500ms`, `60s`, or `2m`. |
+| `PORTER_DIAL_TIMEOUT` | `5s` | Upstream connection timeout; Go duration from `1ms` to `24h`, for example `500ms`, `5s`, or `1m`. |
 
 Rules accept individual ports from 1 to 65535. TCP and UDP can share the same numeric port. Listen addresses must be local IP addresses; enter IPv6 addresses such as `::` without brackets in rule forms. Destinations accept an IP or hostname separately from the port. Hostnames resolve for each new TCP connection or UDP session, not each datagram. UDP has no connection handshake and does not try another resolved address just because a destination does not respond; use an explicitly reachable IP if only some of a hostname's addresses are reachable. Invalid fields, occupied listeners, and management-port conflicts are reported by the panel. For changes between overlapping listeners, disable the rule before changing its listen address.
 

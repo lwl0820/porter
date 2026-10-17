@@ -31,6 +31,7 @@ services:
     environment:
       PORTER_ADMIN_USERNAME: admin
       PORTER_ADMIN_PASSWORD: ${PORTER_ADMIN_PASSWORD:?请先设置 PORTER_ADMIN_PASSWORD}
+      PORTER_HTTP_ADDR: "0.0.0.0:8080"
     volumes:
       - porter-data:/data
 
@@ -50,7 +51,7 @@ docker compose up -d
 docker compose logs -f porter
 ```
 
-在可信管理网络访问 `http://服务器IP:8080`，使用 `admin` 和配置的密码登录。用户名可直接在 `compose.yaml` 中修改。更改凭据后执行 `docker compose up -d --force-recreate` 重建容器生效，旧登录会话随之失效。
+在可信管理网络访问 `http://服务器IP:8080`，使用 `admin` 和配置的密码登录。用户名可直接在 `compose.yaml` 中修改。若要将 Web 端口改为 18080，将 `PORTER_HTTP_ADDR` 改为 `"0.0.0.0:18080"`，然后访问 `http://服务器IP:18080`。host 网络直接使用配置的端口，无需添加 `ports` 映射。
 
 管理端口仅向可信管理网络开放。通过公网管理时，使用外置 HTTPS 反向代理，将 `PORTER_HTTP_ADDR` 绑定到代理可访问的可信后端地址，并设置 `PORTER_COOKIE_SECURE: "true"`。反向代理必须保留浏览器访问的 `Host` 请求头：Porter 会比对 Origin 与 Host，不信任转发请求头。TCP、UDP 业务流量是否加密取决于业务协议。请自行在宿主机防火墙和云安全组放行需要的转发端口。
 
@@ -58,17 +59,21 @@ docker compose logs -f porter
 
 ## 环境变量
 
+下表列出 Porter 的全部运行时环境变量。可选变量未设置或设为空字符串时使用默认值。管理员用户名和密码均必填：空值或仅含空白字符时拒绝启动，用户名会去除首尾空白。布尔值、地址、整数或时长格式无效，或数值超出范围时，程序拒绝启动。
+
+需要修改其他变量时，将其加入 `compose.yaml` 中服务的 `environment`，例如 `PORTER_UDP_IDLE_TIMEOUT: "2m"`。同目录的 `.env` 用于 Compose 变量替换，仅在其中写入变量不会自动传入容器。修改环境变量后执行 `docker compose up -d --force-recreate` 重建容器生效；重建会中断全部转发会话，并使旧登录会话失效。
+
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `PORTER_ADMIN_USERNAME` | 必填 | 管理员用户名，空值拒绝启动。 |
-| `PORTER_ADMIN_PASSWORD` | 必填 | 管理员密码，不提供默认密码。 |
+| `PORTER_ADMIN_USERNAME` | 必填，无默认值 | 管理员用户名。 |
+| `PORTER_ADMIN_PASSWORD` | 必填，无默认值 | 管理员密码。 |
 | `PORTER_HTTP_ADDR` | `0.0.0.0:8080` | 显式本机 IPv4/IPv6 地址与 1–65535 端口，例如 `127.0.0.1:8080`、`[::1]:8080`；不接受域名。 |
 | `PORTER_DB_PATH` | `/data/porter.db` | SQLite 文件路径，应持久化整个目录。 |
-| `PORTER_COOKIE_SECURE` | `false` | 浏览器通过 HTTPS 访问时设为 `true`。 |
-| `PORTER_MAX_SESSIONS` | `4096` | 全局 TCP 连接与 UDP 会话合计上限。 |
-| `PORTER_MAX_SESSIONS_PER_RULE` | `1024` | 单条逻辑规则的 TCP 连接与 UDP 会话合计上限，TCP+UDP 两协议共享额度。 |
-| `PORTER_UDP_IDLE_TIMEOUT` | `60s` | UDP 会话空闲回收时间，使用 Go duration 格式。 |
-| `PORTER_DIAL_TIMEOUT` | `5s` | 上游连接超时，使用 Go duration 格式。 |
+| `PORTER_COOKIE_SECURE` | `false` | 布尔值；浏览器通过 HTTPS 访问时设为 `true`，使登录 Cookie 仅通过 HTTPS 发送。 |
+| `PORTER_MAX_SESSIONS` | `4096` | 全局 TCP 连接与 UDP 会话合计上限，取值为 1–1000000 的整数。 |
+| `PORTER_MAX_SESSIONS_PER_RULE` | `1024` | 单条逻辑规则的 TCP 连接与 UDP 会话合计上限，取值为 1–1000000 的整数；TCP+UDP 两协议共享额度。 |
+| `PORTER_UDP_IDLE_TIMEOUT` | `60s` | UDP 会话空闲回收时间，使用 Go duration 格式，范围 `1ms`–`24h`，例如 `500ms`、`60s`、`2m`。 |
+| `PORTER_DIAL_TIMEOUT` | `5s` | 上游连接超时，使用 Go duration 格式，范围 `1ms`–`24h`，例如 `500ms`、`5s`、`1m`。 |
 
 规则端口为 1–65535 的单个整数，TCP 和 UDP 可以使用相同数字端口。监听地址必须是本机 IP；IPv6 地址在表单中直接填写 `::` 等地址，不加方括号。目标 IP 或域名与端口分别填写。域名在新 TCP 连接或新 UDP 会话创建时解析，不会逐个数据报解析。UDP 没有连接握手，不会因为目标未返回业务响应就切换其他解析地址；域名仅部分地址可达时，请使用明确可达的 IP。非法字段、监听占用和管理端口冲突会在界面提示。监听地址变更涉及自身重叠时，请先停用再修改。
 
