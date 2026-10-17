@@ -171,3 +171,40 @@
 ### Next Steps
 
 - 合并到main、删除codex/linux-one-click-install、创建v0.1.0标签并推送；Actions异步验证及发布，真实发行版systemd宿主矩阵尚未实测。
+
+
+## Session 9: 交付默认用户登录与双语卸载
+<!-- trellis-session: v=2 fp=9dc2cf6cd2f62eef -->
+
+**Date**: 2026-10-18
+**Task**: 交付默认用户登录与双语卸载
+**Branch**: `codex/user-login-bilingual-uninstall`
+
+### Summary
+
+默认首页进入普通用户端，原生脚本支持中英双语、保留数据卸载及二次确认彻底删除，同版本重装与故障恢复已验证。用户授权提交后合并main、删除开发分支并推送。
+
+### Main Changes
+
+- 同步生产和开发默认用户入口，保留独立管理员入口。
+- 增加脚本双语、卸载生命周期与严格资源核对，保留原有33项未跟踪路径。
+- 更新中英文README和实际契约，归档完整规划及验证记录。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7b41ec7` | feat: 默认用户登录并支持双语安装与卸载 |
+
+### Testing
+
+- [OK] 33项安装器回归、56项前端测试、lint/type-check/build、Go vet/race及差异检查通过。
+- [OK] 实际浏览器验证生产/开发用户根入口及管理员入口；卸载采用隔离模拟，未操作真实systemd服务或账号，未声称窄屏实测。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 按用户授权同步远端、合并main、删除开发分支并推送，核对本地与远端状态。
