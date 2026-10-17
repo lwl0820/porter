@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/contracts.md", "reason": "验证用户根入口、独立管理端、API 404 和生产构建"}
+{"file": ".trellis/spec/backend/contracts.md", "reason": "验证脚本双语、卸载归属、数据保留、状态恢复及模拟测试边界"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查入口、部署输出、脚本状态及 README 的跨层一致性"}
+{"file": ".trellis/tasks/10-18-user-login-bilingual-uninstall/research/entrypoints-and-lifecycle.md", "reason": "关注完整安装保护与卸载恢复的区别，不把模拟验证当作真实宿主实测"}

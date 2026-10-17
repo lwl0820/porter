@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/contracts.md", "reason": "独立双端入口、构建与前端验证契约；根地址按本任务要求改为用户端"}
+{"file": ".trellis/spec/backend/contracts.md", "reason": "原生安装、环境文件、systemd、托管记录与既有故障保护"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "集中维护双语消息与生命周期逻辑，避免重复安装和卸载校验分支"}
+{"file": ".trellis/tasks/10-18-user-login-bilingual-uninstall/research/entrypoints-and-lifecycle.md", "reason": "生产与开发入口、卸载后重装状态及现有测试边界"}
