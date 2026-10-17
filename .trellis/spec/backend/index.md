@@ -1,10 +1,10 @@
 # 后端开发规范
 
-覆盖环境变量、认证、规则服务、转发引擎、SQLite、Docker 与原生 systemd 部署。
+覆盖环境变量、认证、规则服务、转发引擎、SQLite、双程序原生CLI与语言偏好、Docker、原生systemd安装及显式升级恢复。
 
 ## 开发前检查
 
-1. 读取 [实际代码契约](contracts.md)；涉及原生 CLI 时同时读取 [命令行与本机控制契约](cli-contracts.md)。
+1. 读取 [实际代码契约](contracts.md)；涉及原生 CLI 时同时读取 [命令行与本机控制契约](cli-contracts.md)；涉及原生安装、发行、卸载或升级时同时读取 [原生安装与升级契约](native-install-contracts.md)。
 2. 读取当前任务的需求、设计和实施计划。
 3. 改动前搜索当前实现，不把历史模板作为已经存在的项目约定。
 
