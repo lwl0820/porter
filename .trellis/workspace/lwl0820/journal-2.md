@@ -136,3 +136,38 @@
 ### Next Steps
 
 - 按用户授权将本分支合并 main，删除开发分支并推送；核验远端状态。
+
+
+## Session 8: 交付 Linux 原生交互式一键部署
+<!-- trellis-session: v=2 fp=f275e5b6c8e1ee7d -->
+
+**Date**: 2026-10-18
+**Task**: 交付 Linux 原生交互式一键部署
+**Branch**: `codex/linux-one-click-install`
+
+### Summary
+
+通过 curl 与 bash 下载校验 GitHub Release 原生程序，交互配置凭据与监听并以 systemd 专用账号运行。18组原生回归、unit静态验证及实际程序登录通过；用户授权合并main、删除开发分支并发布v0.1.0。
+
+### Main Changes
+
+- 增加二进制校验、systemd服务与受限配置，补齐半写恢复、数据丢失保护及安装锁测试。
+- 更新两份README、CI和部署契约；仅提交本任务文件，保留33项原有未跟踪路径。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3a1fe49` | feat: 增加 Linux 原生交互式一键部署 |
+
+### Testing
+
+- [OK] 18组原生测试通过，耗时86.539秒；Bash/Python语法、actionlint、unit校验无警告及真实程序凭据/健康验证通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 合并到main、删除codex/linux-one-click-install、创建v0.1.0标签并推送；Actions异步验证及发布，真实发行版systemd宿主矩阵尚未实测。
