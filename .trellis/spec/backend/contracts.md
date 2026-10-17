@@ -218,21 +218,27 @@ PORTER_TRAFFIC_FLUSH_INTERVAL 默认 5s，Go duration 范围 1ms–24h，空值�
 
 ### 10.2 命令签名
 
-`bash scripts/install.sh [--install-dir /opt/porter] [--version v1.0.0]`；`--help` 只输出帮助。远程入口为 `curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install.sh | bash`，以 root 或通过 sudo 执行宿主写操作。默认选择最新正式 GitHub Release，显式版本允许已发布预发行版。
+`bash scripts/install.sh [--install-dir /opt/porter] [--version v1.0.0] [--lang zh-CN|en]` 默认安装；`--uninstall [--purge]` 卸载，purge 不可独用，卸载拒绝 version。`--help` 按语言输出，不要求权限、宿主检测或终端，lang 位置无关。远程入口 `curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install.sh | bash`，传参用 `bash -s -- --lang en`。宿主操作用 root/sudo。默认最新正式 Release，显式版本允许已发布预发行版。
 
 ### 10.3 输入、文件及服务契约
 
 - 首次通过 `/dev/tty` 输入管理员用户名、隐藏密码、密码确认、完整 Web 监听地址，不从脚本管道读取，不生成默认密码。先关闭终端回显再显示密码提示，EOF、INT、TERM 和正常退出均恢复回显。
+- 未指定 lang 时从控制终端选中文/English，回车或无终端默认中文。自有帮助、提示、校验、确认和结果均翻译，外部命令诊断除外。集中消息用参数插值，所有交互读控制终端。
 - 用户名去除首尾空白，密码保留原始值但不能全为空白；监听为显式 IPv4:端口或 [IPv6]:端口，范围 1–65535。通配监听通过同族回环地址检查健康，禁止固定使用 8080。
 - 目标 Ubuntu 22.04/24.04、Debian 12/13、RHEL/Rocky/AlmaLinux 9/10，架构 amd64/arm64；要求 systemd 为 PID 1。必要 Python 3、curl 和 CA 依赖通过系统 apt/dnf 补齐，不安装编译工具或 Docker，不自动卸载软件包。
 - GitHub API 获取正式 latest 或指定 tag；精确选择 `porter-${version}-linux-${arch}.tar.gz` 与 `SHA256SUMS`。校验唯一的对应 SHA256 项，仅读取压缩包中名为 `porter` 的唯一普通文件，不抽取任意路径/链接；执行暂存程序 `--version` 核对发布版本。
 - 默认程序 `/opt/porter/porter`（目录可指定）、配置 `/etc/porter/porter.env`、数据 `/var/lib/porter`、unit `/etc/systemd/system/porter.service`。配置与安装状态权限 600，数据目录权限 700，程序权限 755。
 - 环境文件逐项使用双引号，编码反斜线、双引号、反引号和美元符号；生产只通过标准输入和受限解析读取，禁止 shell source，禁止 Compose 的 `$$` 替换。文件内的 `PORTER_DB_PATH` 固定为 `/var/lib/porter/porter.db`。
 - `porter.service` 使用专用禁止登录的系统用户/组 porter、`Restart=on-failure`、开机自启。`AmbientCapabilities` 和 `CapabilityBoundingSet` 仅提供 `CAP_NET_BIND_SERVICE`，配合 `NoNewPrivileges`、`ProtectSystem=strict`、`StateDirectory=porter` 允许完整数据库目录写入。
-- unit 各字段按其自身语法编码，不能把 shell 引号规则泛用于所有 systemd 指令。固定 `EnvironmentFile=/etc/porter/porter.env` 不包外层引号，否则该指令可能被静默忽略；ExecStart 使用冒号前缀禁用参数变量展开，路径中的百分号仍需写为 `%%`。安装目录的控制字符、引号和反斜线提前拒绝，空格、美元符号和百分号须通过实际 unit 验证。检查 FragmentPath，不能用新 unit 静默覆盖 vendor 目录中的同名服务。
-- `/etc/porter/install.json` 保存 schema=1、directory、arch、version、status（initializing/complete）；安装目录和全局配置目录加锁，只清理本进程成功获取的锁，不能删除其他安装进程持有的锁；下载暂存只用安装目录 `.tmp`。状态、凭据和 unit 的最终写入均先在目标目录创建受限 `.new` 文件，再原子重命名；不能在最终路径留下半写文件，使初始化状态无法恢复。首次校验产物后才记录初始化状态，重复执行复用原配置、程序和数据库，不隐式升级；有初始化状态才能安全恢复局部安装。
+- unit 按各字段语法编码：`EnvironmentFile=/etc/porter/porter.env` 不包外层引号，避免指令被忽略；ExecStart 冒号禁用变量展开，百分号写 `%%`。目录拒绝控制字符/引号/反斜线，空格/美元符/百分号须验证。FragmentPath 禁止覆盖 vendor 同名服务。
+- `/etc/porter/install.json`：schema=1、directory、arch、version、status（initializing/complete/uninstalling/uninstalled）。目录/全局锁仅释放本进程取得者；暂存仅安装目录 `.tmp`。状态/凭据/unit 在目标目录受限 `.new` 写完再原子改名。产物校验后才记 initializing；重试复用配置/程序/数据，不隐式升级，局部安装凭状态恢复。
+- 已托管安装取得全局锁后重新校验 directory/arch/version/status，记录变化、消失或无效即拒绝重跑，避免沿用已卸载快照。FragmentPath/DropInPaths 查询必须检查退出码，失败不能视为空。
 - 已有完整安装缺失关键文件、数据目录或 `porter.db` 时拒绝继续，不能自动创建空库冒充恢复；目录/架构不匹配、未知账号/配置/unit/数据库或符号链接等也明确拒绝接管。已托管用户校验 home、nologin 与主组，不能把未知普通用户变为服务用户。
-- 成功需要 unit 已启用且运行，所选地址 `/healthz` 返回 `{"status":"ok"}`，HTTP 检查后再次确认 unit 仍在运行。输出实际配置、数据和程序位置及 systemctl/journalctl 命令，失败不得输出就绪。
+- 就绪需 unit 已启用且运行，所选地址 `/healthz` 返回 `{"status":"ok"}`，探测后再次确认运行。分别输出 `/user/`、`/admin/`、配置/数据/程序位置及 systemctl/journalctl 命令；根地址进入用户端，失败不得报就绪。
+- 卸载从记录识别自定义目录，显式目录须匹配；拒绝未知 FragmentPath/drop-in、不匹配 unit/账号及含中间路径的符号链接。无需网络、下载、补装依赖或凭据输入。控制终端列出删除/保留资源后输入 `yes`，purge 另输入 `DELETE`；默认取消，全部确认先于状态写入和停服。
+- 卸载写 uninstalling，停服、禁用并确认不活跃后删除托管 unit/程序，再 reload；失败停止，保留恢复信息。默认保留正式配置、完整数据、权限600记录及服务账号/组，写 uninstalled；purge 清理前三者及账号/组，记录最后删。额外文件、共享 journal、系统包和 Docker 资源保留，程序目录仅空时删除。
+- 预检现存配置/数据库为普通文件、数据为目录；两种卸载均核验并精确清理 `$CONFIG.new`、`$STATE.new`、`$UNIT.new`、`$INSTALL_DIR/.porter.new`，拒绝类型冲突及链接。禁止递归清理程序目录或任意 `.tmp`；README 须说明强制中断后的历史 `.tmp/install.XXXXXXXX` 可能含配置/凭据副本，保留并需人工核对。
+- uninstalled 重装要求原配置/数据库存在，下载并校验记录版本，恢复文件前转 initializing，使恢复失败可重试；历史版本不可下载时报错，不升级。uninstalling 禁止安装、允许续卸载，容忍已删资源及缓存的原托管 FragmentPath，仍拒绝其他来源。complete 缺库/文件保护不变。
 
 ### 10.4 校验与错误矩阵
 
@@ -245,16 +251,24 @@ PORTER_TRAFFIC_FLUSH_INTERVAL 默认 5s，Go duration 范围 1ms–24h，空值�
 | 摘要不符、重复校验项、目录/链接代替程序、版本不匹配 | 不安装暂存程序，不覆盖既有可用版本。 |
 | 未托管文件/账号/unit、安装状态不一致或路径冲突 | 保留原状，提示人工处理，不能清理数据。 |
 | systemd 启动/启用或健康检查失败 | 非零退出，保留初始化状态与配置，允许后续重试。 |
+| 卸载取消/确认不匹配/无终端 | 不停服、不删除、不更新状态；无终端报错。 |
+| 卸载未知资源/类型或记录冲突 | 拒绝接管与删除。 |
+| 停服/禁用/删除/reload/账号清理失败 | 非零，不报成功，保留续卸载信息。 |
+| 重复卸载 | 已卸载提示；purge仍确认。无记录且无资源为空操作，否则拒绝。 |
+| 重装缺原配置/数据库/历史包 | 非零，不建空库、不重置、不升级。 |
 
 ### 10.5 正常、基础与异常案例
 
 - 正常：交互输入包含 `$`、反引号、引号、反斜线、中文和首尾空格的密码，最终程序凭据保持原值；IPv6 通配监听使用 `[::1]` 探测。
 - 基础：再次执行不下载新版本、不重置配置；第一次启动失败后复用原始版本及凭据重试。数据库保存整个目录，不能复制运行中的单个 db 文件作为完整备份；备份包含凭据，目录权限700、归档权限600。
 - 异常：未知 vendor unit、服务账号、损坏压缩包或不匹配校验和不能被安装器“修复”为新部署；回退旧程序需要匹配的完整数据备份。
+- 卸载保留配置/数据库字节和所有权，同版本重装复用凭据；中英文帮助/取消可用，删 unit 后 reload 失败及 purge 已删账号后中断均可续卸载。
 
 ### 10.6 必需验证
 
-执行 Bash 语法、帮助、`python3 scripts/test-install.py`、actionlint 和 `git diff --check`。测试通过伪终端、模拟发布包和命令替身覆盖发行版/架构、sudo、输入校验、隐藏/恢复回显、摘要校验、原生服务配置、重复执行及失败恢复。使用可用 `systemd-analyze verify` 校验实际生成 unit，除退出码外还须检查 stderr 的忽略/无效指令警告，不能把退出0当作配置均已生效；独立启动当前二进制，验证生成配置的凭据及健康/登录行为。
+执行 Bash 语法/帮助、`python3 scripts/test-install.py`、actionlint、`git diff --check`。PTY、模拟发布包及命令替身覆盖系统/架构、sudo、输入/回显、摘要、unit、重试/恢复。生成 unit 用 `systemd-analyze verify` 验证，退出0且 stderr 无忽略/无效指令警告；独立二进制验证生成配置的凭据、健康/登录。
+
+新增断言：双语帮助/参数顺序/语言选择、无终端默认及错误；卸载取消/二次确认、精确保留删除、目录识别、额外文件、链接/类型/未知资源拒绝；锁后状态变化拒绝；停服/禁用失败不删除、reload及账号清理中断可重试；同版本重装保留配置/数据库，恢复中断可重试。日志不得有卸载网络、包管理或凭据请求。
 
 开发检查不能创建真实全局账号/服务或使用业务数据库；临时文件仅项目 `.tmp`。开发环境 PID1 不是 systemd 时，明确区分 unit 静态验证、实际程序验证和模拟管理命令，不能声称已经验证真实 systemd 用户切换、能力边界及全部发行版宿主安装。原 Docker 安装器测试结果不能用作原生方案的通过证据。
 
@@ -263,3 +277,7 @@ PORTER_TRAFFIC_FLUSH_INTERVAL 默认 5s，Go duration 范围 1ms–24h，空值�
 错误：下载 Actions 临时附件或在目标机编译；把 EnvironmentFile 当 Compose 文件转义；先覆盖程序再验证校验和；从标准输入读取密码或给未知 porter.service 写入覆盖文件。
 
 正确：复用公开 Release 资产和 SHA256SUMS，先暂存校验，再创建原生受限服务；从独立终端交互，密码按 systemd EnvironmentFile 语义编码；用安装状态和实际 FragmentPath 判断能否恢复已有部署。
+
+错误：删程序却留 complete 导致无法重装；取消 complete 缺库保护；递归删除程序目录。
+
+正确：卸载记录 uninstalling/uninstalled，恢复前转 initializing；complete 缺库仍拒绝；精确删除，目录仅空时清理。

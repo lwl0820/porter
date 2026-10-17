@@ -31,9 +31,11 @@ func TestIndependentEntrypoints(t *testing.T) {
 			t.Fatalf("%s 不应兜底成首页", path)
 		}
 	}
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
-	if w.Code != http.StatusFound || w.Header().Get("Location") != "/admin/" {
-		t.Fatal("根地址应跳转管理端")
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(method, "/", nil))
+		if w.Code != http.StatusFound || w.Header().Get("Location") != "/user/" {
+			t.Fatal("根地址应跳转用户端")
+		}
 	}
 }

@@ -46,11 +46,29 @@ elif name in ("apt-get", "dnf"):
             (base / "bin" / command).symlink_to(os.environ["REAL_PYTHON"] if command == "python3" else base / "stub")
 elif name == "getent":
     if args[0] == "passwd" and flag("user"):
-        print("porter:x:999:999::" + str(base / "data") + ":/usr/sbin/nologin")
+        print("porter:x:999:999::" + str(base / "data") + (":/bin/bash" if os.environ.get("FOREIGN_ACCOUNT") else ":/usr/sbin/nologin"))
+        if len(args) == 1 and os.environ.get("SHARED_GROUP"):
+            print("other:x:1000:999::/home/other:/bin/bash")
+    elif args == ["passwd"]:
+        print("root:x:0:0::/root:/bin/bash")
     elif args[0] == "group" and flag("group"):
         print("porter:x:999:")
     else:
         sys.exit(2)
+elif name == "userdel":
+    if os.environ.get("USERDEL_FAIL"):
+        sys.exit(1)
+    (base / "user").unlink(missing_ok=True)
+elif name == "groupdel":
+    if os.environ.get("GROUPDEL_FAIL"):
+        sys.exit(1)
+    (base / "group").unlink(missing_ok=True)
+elif name == "rm":
+    if os.environ.get("REMOVE_FAIL") and any(arg.endswith(os.environ["REMOVE_FAIL"]) for arg in args):
+        sys.exit(1)
+    if os.environ.get("CACHE_FRAGMENT") and any(arg.endswith("porter.service") for arg in args):
+        enable("cached_fragment")
+    sys.exit(subprocess.run(["/usr/bin/rm", *args]).returncode)
 elif name == "groupadd":
     enable("group")
 elif name == "useradd":
@@ -58,6 +76,33 @@ elif name == "useradd":
         sys.exit(1)
     enable("user")
 elif name == "install":
+    race = os.environ.get("MANAGED_STATE_RACE")
+    state = base / "etc/porter/install.json"
+    if race and "-d" in args and args[-1] == str(base / "program with spaces") and not flag("state_race_done"):
+        # 模拟另一进程在前置校验后、目录加锁前完成卸载或改写记录。
+        enable("state_race_done")
+        record = json.loads(state.read_text())
+        if race in ("uninstalled", "purged"):
+            (base / "program with spaces/porter").unlink()
+            (base / "etc/systemd/system/porter.service").unlink()
+            (base / "enabled").unlink()
+            enable("stopped")
+        if race == "purged":
+            state.unlink()
+            (base / "etc/porter/porter.env").unlink()
+            shutil.rmtree(base / "data")
+            (base / "user").unlink()
+            (base / "group").unlink()
+        else:
+            if race == "uninstalled":
+                record["status"] = "uninstalled"
+            elif race == "version":
+                record["version"] = "v1.2.4"
+            elif race == "arch":
+                record["arch"] = "arm64"
+            elif race == "directory":
+                record["directory"] = str(base / "other-program")
+            state.write_text(json.dumps(record))
     failure = os.environ.get("INSTALL_FAIL")
     if failure and args[-1].endswith((failure, failure + ".new")):
         sys.exit(1)
@@ -99,21 +144,37 @@ elif name == "curl":
         print("unexpected" if os.environ.get("WRONG_HEALTH_BODY") else '{"status":"ok"}')
 elif name == "systemctl":
     if args[0] == "show":
-        if os.environ.get("VENDOR_UNIT"):
+        if "--property=DropInPaths" in args:
+            if os.environ.get("DROP_IN_QUERY_FAIL"):
+                sys.exit(1)
+            print("/etc/systemd/system/porter.service.d/custom.conf" if os.environ.get("DROP_IN") else "")
+        elif os.environ.get("VENDOR_UNIT"):
             print("/usr/lib/systemd/system/porter.service")
-        elif (base / "etc/systemd/system/porter.service").exists():
+        elif (base / "etc/systemd/system/porter.service").exists() or flag("cached_fragment"):
             print(base / "etc/systemd/system/porter.service")
     elif args[0] == "enable":
         if os.environ.get("START_FAIL"):
             sys.exit(1)
         enable("enabled")
+        (base / "stopped").unlink(missing_ok=True)
         (base / "data/porter.db").touch()
+    elif args[0] == "stop":
+        if os.environ.get("STOP_FAIL"):
+            sys.exit(1)
+        if not os.environ.get("STILL_ACTIVE"):
+            enable("stopped")
+    elif args[0] == "disable":
+        if os.environ.get("DISABLE_FAIL"):
+            sys.exit(1)
+        (base / "enabled").unlink(missing_ok=True)
     elif args[0] == "is-active":
-        sys.exit(1 if os.environ.get("ACTIVE_FAIL") or flag("exited") else 0)
+        sys.exit(3 if os.environ.get("ACTIVE_FAIL") or flag("exited") or flag("stopped") or (not flag("enabled") and not os.environ.get("STILL_ACTIVE")) else 0)
     elif args[0] == "is-enabled":
         sys.exit(1 if os.environ.get("ENABLED_FAIL") or not flag("enabled") else 0)
-    elif args[0] == "daemon-reload" and os.environ.get("RELOAD_FAIL"):
-        sys.exit(1)
+    elif args[0] == "daemon-reload":
+        if os.environ.get("RELOAD_FAIL"):
+            sys.exit(1)
+        (base / "cached_fragment").unlink(missing_ok=True)
 else:
     raise AssertionError(name)
 '''
@@ -135,9 +196,9 @@ class InstallCase(unittest.TestCase):
         (self.base / "run").mkdir()
         (self.base / "stub").write_text(STUB)
         (self.base / "stub").chmod(0o755)
-        for command in ("uname", "id", "sudo", "apt-get", "dnf", "systemctl", "sleep", "curl", "getent", "useradd", "groupadd", "install"):
+        for command in ("uname", "id", "sudo", "apt-get", "dnf", "systemctl", "sleep", "curl", "getent", "useradd", "groupadd", "userdel", "groupdel", "rm", "install"):
             (self.bin / command).symlink_to(self.base / "stub")
-        for command in ("env", "cat", "mktemp", "tee", "chmod", "mv", "rm", "rmdir", "mkdir", "realpath", "python3", "stty", "cmp", "cut", "test"):
+        for command in ("env", "cat", "mktemp", "tee", "chmod", "mv", "rmdir", "mkdir", "realpath", "python3", "stty", "cmp", "cut", "test"):
             (self.bin / command).symlink_to(shutil.which(command))
         self.directory = self.base / "program with spaces"
         self.config = self.etc / "porter/porter.env"
@@ -184,10 +245,15 @@ class InstallCase(unittest.TestCase):
 
     def dialogue(self, username="admin", password="test-secret", listen="0.0.0.0:18080"):
         return [("管理员用户名：", username), ("管理员密码：", password), ("确认密码：", password), ("Web 监听地址", listen)]
-    def run_install(self, dialogue=None, args=(), terminal=True):
+    def run_install(self, dialogue=None, args=(), terminal=True, language="zh-CN", directory=True):
         # 仅改写测试副本中的宿主路径，生产脚本不提供绕过系统检测的环境变量。
         script = SCRIPT.replace("/etc/", str(self.etc) + "/").replace("/var/lib/porter", str(self.base / "data")).replace("/proc/1/comm", str(self.base / "proc1")).replace("/run/systemd/system", str(self.base / "run"))
-        argv = ["/bin/bash", "-s", "--", "--install-dir", str(self.directory), *args]
+        argv = ["/bin/bash", "-s", "--"]
+        if language is not None:
+            argv.extend(("--lang", language))
+        if directory:
+            argv.extend(("--install-dir", str(self.directory)))
+        argv.extend(args)
         if not terminal:
             result = subprocess.run(argv, input=script, text=True, capture_output=True,
                                     env=self.env, start_new_session=True, timeout=10)
@@ -253,6 +319,369 @@ class InstallCase(unittest.TestCase):
         exec(helper.split("\ntry:\n", 1)[0], namespace)
         return namespace["read_environment"](self.config.read_text())
 
+    def uninstall(self, purge=False, answers=None, **kwargs):
+        english = kwargs.get("language") == "en"
+        prompts = [("Confirm uninstall?" if english else "确认卸载？", "yes")]
+        if purge:
+            prompts.append(("Type DELETE" if english else "输入 DELETE", "DELETE"))
+        return self.run_install(dialogue=prompts if answers is None else answers,
+                                args=("--uninstall", *( ("--purge",) if purge else () )), **kwargs)
+
+    def snapshot(self):
+        return {str(path.relative_to(self.base)): path.read_bytes()
+                for folder in (self.config.parent, self.base / "data")
+                for path in folder.rglob("*") if path.is_file()}
+
+    def test_languages_help_validation_and_selection(self):
+        for language, marker in (("zh-CN", "原生交互安装"), ("en", "native interactive installer")):
+            code, output = self.run_install(args=("--help", "--lang", language), terminal=False)
+            self.assertEqual(code, 0, output)
+            self.assertIn(marker, output)
+            self.assertIn("--purge", output)
+            self.assertFalse(self.calls())
+        for args, text in ((("--purge",), "--purge requires --uninstall"),
+                           (("--uninstall", "--version", "v1.2.3"), "--version cannot"),
+                           (("--unknown",), "Unknown argument"),
+                           (("--version",), "Missing value")):
+            code, output = self.run_install(args=args + ("--lang", "en"), terminal=False)
+            self.assertNotEqual(code, 0, output)
+            self.assertIn(text, output)
+            self.assertFalse(self.directory.exists())
+        dialogue = [("Language", "2"), ("Admin username:", "admin"),
+                    ("Admin password:", "one"), ("Confirm password:", "two"),
+                    ("Admin password:", "english-secret"), ("Confirm password:", "english-secret"),
+                    ("Web listen address", "bad"), ("Web listen address", "[::]:18080")]
+        code, output = self.run_install(dialogue, language=None)
+        self.assertEqual(code, 0, output)
+        self.assertIn("Passwords do not match", output)
+        self.assertIn("Enter a valid", output)
+        self.assertIn("User portal: http://[::1]:18080/user/", output)
+        self.assertIn("Admin portal: http://[::1]:18080/admin/", output)
+        self.assertNotIn("english-secret", output)
+        self.assertTrue(self.terminal_echo_restored)
+        self.reset_installation()
+        self.assert_success([("Language", ""), *self.dialogue()], language=None)
+
+    def test_uninstall_retains_all_data_and_reinstalls_recorded_version(self):
+        self.assert_success()
+        database = self.base / "data/porter.db"
+        database.write_bytes(b"original database\x00bytes")
+        (self.base / "data/porter.db-wal").write_bytes(b"complete wal")
+        (self.base / "data/porter.db-shm").write_bytes(b"complete shm")
+        with self.config.open("a") as file:
+            file.write('PORTER_COOKIE_SECURE="true"\n')
+        before = self.snapshot()
+        extra = self.directory / "user-file.txt"
+        extra.write_text("额外文件")
+        (self.base / "calls").unlink()
+        code, output = self.uninstall(directory=False)
+        self.assertEqual(code, 0, output)
+        self.assertIn("已保留", output)
+        self.assertFalse(self.unit.exists() or (self.directory / "porter").exists())
+        self.assertFalse((self.base / "enabled").exists())
+        self.assertTrue((self.base / "stopped").exists())
+        self.assertTrue((self.base / "user").exists() and (self.base / "group").exists())
+        self.assertEqual(extra.read_text(), "额外文件")
+        self.assertEqual(json.loads(self.state.read_text())["status"], "uninstalled")
+        after = self.snapshot()
+        self.assertEqual({k:v for k,v in before.items() if not k.endswith("install.json")},
+                         {k:v for k,v in after.items() if not k.endswith("install.json")})
+        self.assertFalse(self.actions("curl") or self.actions("apt-get") or self.actions("dnf") or self.actions("useradd"))
+        self.assertEqual([call[0] for call in self.actions("systemctl") if call[0] in ("stop", "disable", "daemon-reload")],
+                         ["stop", "disable", "daemon-reload"])
+        code, output = self.uninstall(terminal=False, directory=False)
+        self.assertEqual(code, 0, output)
+        self.assertIn("无需重复操作", output)
+        (self.base / "calls").unlink()
+        self.assert_success(terminal=False)
+        self.assertEqual(self.config.read_bytes(), before[str(self.config.relative_to(self.base))])
+        self.assertEqual(database.read_bytes(), b"original database\x00bytes")
+        self.assertTrue(any("/releases/tags/v1.2.3" in str(call) for call in self.actions("curl")))
+        self.assertFalse(any("/releases/latest" in str(call) for call in self.actions("curl")))
+        self.assertFalse(self.actions("useradd"))
+
+    def test_uninstall_cancel_and_missing_terminal_do_not_modify_installation(self):
+        self.assert_success()
+        before = self.snapshot()
+        binary = (self.directory / "porter").read_bytes()
+        for purge, answers, terminal in ((False, [("确认卸载？", "")], True),
+                                          (True, [("确认卸载？", "yes"), ("输入 DELETE", "no")], True),
+                                          (False, None, False)):
+            (self.base / "calls").unlink(missing_ok=True)
+            code, output = self.uninstall(purge, answers=answers, terminal=terminal)
+            self.assertEqual(code, 0 if terminal else 1, output)
+            self.assertEqual(self.snapshot(), before)
+            self.assertEqual((self.directory / "porter").read_bytes(), binary)
+            self.assertTrue(self.unit.exists())
+            self.assertFalse(any(call[0] in ("stop", "disable", "daemon-reload") for call in self.actions("systemctl")))
+            self.assertFalse((self.config.parent / ".install-lock").exists())
+            self.assertFalse((self.directory / ".install-lock").exists())
+
+    def test_purge_english_removes_managed_resources_and_preserves_extra_files(self):
+        self.assert_success()
+        (self.config.parent / "notes.txt").write_text("保留配置目录的额外文件")
+        (self.directory / "notes.txt").write_text("保留程序目录的额外文件")
+        code, output = self.uninstall(True, language="en", directory=False)
+        self.assertEqual(code, 0, output)
+        self.assertIn("Porter has been purged", output)
+        for path in (self.config, self.state, self.unit, self.base / "data", self.base / "user", self.base / "group", self.directory / "porter"):
+            self.assertFalse(path.exists(), str(path))
+        self.assertTrue((self.directory / "notes.txt").exists())
+        self.assertTrue((self.config.parent / "notes.txt").exists())
+        code, output = self.uninstall(True, language="en", terminal=False)
+        self.assertEqual(code, 0, output)
+        self.assertIn("already uninstalled", output)
+
+    def test_purge_after_retained_uninstall_and_clean_repeat(self):
+        self.assert_success()
+        self.assertEqual(self.uninstall()[0], 0)
+        code, output = self.uninstall(True, directory=False)
+        self.assertEqual(code, 0, output)
+        self.assertFalse(self.config.parent.exists() or self.directory.exists())
+        self.assertEqual(self.uninstall(True, terminal=False)[0], 0)
+
+    def test_uninstall_failures_preserve_recovery_record_and_allow_retry(self):
+        for failure, value in (("STOP_FAIL", "1"), ("DISABLE_FAIL", "1"), ("STILL_ACTIVE", "1"),
+                               ("REMOVE_FAIL", "porter.service"), ("RELOAD_FAIL", "1"),
+                               ("USERDEL_FAIL", "1"), ("GROUPDEL_FAIL", "1")):
+            with self.subTest(failure=failure):
+                self.assert_success()
+                saved = self.config.read_bytes()
+                self.env[failure] = value
+                self.env["CACHE_FRAGMENT"] = "1"
+                code, output = self.uninstall(True)
+                self.assertNotEqual(code, 0, output)
+                self.assertNotIn("已彻底删除", output)
+                self.assertEqual(json.loads(self.state.read_text())["status"], "uninstalling")
+                if failure in ("STOP_FAIL", "DISABLE_FAIL", "STILL_ACTIVE"):
+                    self.assertTrue(self.unit.exists() and (self.directory / "porter").exists())
+                    self.assertEqual(self.config.read_bytes(), saved)
+                del self.env[failure]
+                code, output = self.run_install(terminal=False)
+                self.assertNotEqual(code, 0, output)
+                code, output = self.uninstall(True)
+                self.assertEqual(code, 0, output)
+                self.assertFalse(self.state.exists() or (self.base / "data").exists())
+                self.env.pop("CACHE_FRAGMENT", None)
+                self.reset_installation()
+
+    def test_uninstall_rejects_foreign_resources_bad_state_and_path_mismatch(self):
+        self.assert_success()
+        for failure in ("VENDOR_UNIT", "DROP_IN", "FOREIGN_ACCOUNT", "SHARED_GROUP"):
+            with self.subTest(failure=failure):
+                self.env[failure] = "1"
+                saved = self.snapshot()
+                code, output = self.uninstall(True, terminal=False)
+                self.assertNotEqual(code, 0, output)
+                self.assertEqual(self.snapshot(), saved)
+                del self.env[failure]
+        code, output = self.run_install(args=("--uninstall", "--install-dir", str(self.base / "wrong")), terminal=False)
+        self.assertNotEqual(code, 0, output)
+        original = self.state.read_bytes()
+        self.state.write_text('{"schema": 1, "directory": "/", "status": "complete"}')
+        code, output = self.uninstall(directory=False, terminal=False)
+        self.assertNotEqual(code, 0, output)
+        self.state.write_bytes(original)
+        self.unit.write_text("未知服务")
+        code, output = self.uninstall(terminal=False)
+        self.assertNotEqual(code, 0, output)
+        self.assertEqual(self.unit.read_text(), "未知服务")
+        self.assertTrue((self.directory / "porter").exists())
+
+    def test_uninstall_drop_in_query_failure_preserves_resources(self):
+        self.assert_success()
+        before = self.snapshot()
+        binary = (self.directory / "porter").read_bytes()
+        unit = self.unit.read_bytes()
+        (self.base / "calls").unlink()
+        self.env["DROP_IN_QUERY_FAIL"] = "1"
+        code, output = self.uninstall(True, answers=[], language="en")
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("Cannot query the systemd service", output)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual((self.directory / "porter").read_bytes(), binary)
+        self.assertEqual(self.unit.read_bytes(), unit)
+        self.assertFalse(any(call[0] in ("stop", "disable", "daemon-reload") for call in self.actions("systemctl")))
+        self.assertFalse(self.actions("rm") or self.actions("userdel") or self.actions("groupdel"))
+
+    def test_uninstall_rejects_configuration_and_data_type_conflicts(self):
+        self.assert_success()
+        for path in (self.config, self.base / "data", self.base / "data/porter.db"):
+            with self.subTest(path=str(path)):
+                moved = Path(str(path) + ".saved")
+                was_directory = path.is_dir()
+                path.rename(moved)
+                if was_directory:
+                    path.write_text("未知文件")
+                else:
+                    path.mkdir()
+                    (path / "notes.txt").write_text("未知目录内容")
+                before = self.snapshot()
+                (self.base / "calls").unlink()
+                code, output = self.uninstall(True, answers=[], language="en")
+                self.assertNotEqual(code, 0, output)
+                self.assertIn("unexpected file type", output)
+                self.assertEqual(self.snapshot(), before)
+                self.assertEqual(json.loads(self.state.read_text())["status"], "complete")
+                self.assertTrue(self.unit.exists() and (self.directory / "porter").exists())
+                self.assertFalse(any(call[0] in ("stop", "disable", "daemon-reload") for call in self.actions("systemctl")))
+                self.assertFalse(self.actions("rm") or self.actions("userdel") or self.actions("groupdel"))
+                if was_directory:
+                    self.assertEqual(path.read_text(), "未知文件")
+                    path.unlink()
+                else:
+                    self.assertEqual((path / "notes.txt").read_text(), "未知目录内容")
+                    shutil.rmtree(path)
+                moved.rename(path)
+
+    def test_managed_state_change_before_locks_aborts_installation(self):
+        for race in ("uninstalled", "purged", "version", "arch", "directory"):
+            with self.subTest(race=race):
+                self.assert_success()
+                saved = self.config.read_bytes()
+                (self.base / "calls").unlink()
+                self.env["MANAGED_STATE_RACE"] = race
+                code, output = self.run_install(terminal=False, language="en")
+                self.assertNotEqual(code, 0, output)
+                self.assertIn("Installation state changed", output)
+                self.assertNotIn("unbound variable", output)
+                self.assertFalse(any(call[0] in ("enable", "daemon-reload") for call in self.actions("systemctl")))
+                self.assertFalse(any("-d" not in call for call in self.actions("install")))
+                self.assertFalse(self.actions("useradd") or self.actions("groupadd"))
+                if race in ("uninstalled", "purged"):
+                    self.assertFalse(self.unit.exists() or (self.directory / "porter").exists())
+                if race == "purged":
+                    self.assertFalse(self.state.exists() or self.config.exists() or (self.base / "data").exists())
+                else:
+                    self.assertEqual(self.config.read_bytes(), saved)
+                    record = json.loads(self.state.read_text())
+                    self.assertEqual(record["status"], "uninstalled" if race == "uninstalled" else "complete")
+                    if race == "version":
+                        self.assertEqual(record["version"], "v1.2.4")
+                    elif race == "arch":
+                        self.assertEqual(record["arch"], "arm64")
+                    elif race == "directory":
+                        self.assertEqual(record["directory"], str(self.base / "other-program"))
+                self.assertFalse((self.config.parent / ".install-lock").exists())
+                self.assertFalse((self.directory / ".install-lock").exists())
+                del self.env["MANAGED_STATE_RACE"]
+                (self.base / "state_race_done").unlink()
+                self.reset_installation()
+
+    def test_uninstall_partial_installation_removes_uncommitted_staging_files(self):
+        for purge in (False, True):
+            with self.subTest(purge=purge):
+                self.env["PARTIAL_INSTALL_FAIL"] = "porter.env"
+                code, output = self.run_install()
+                self.assertNotEqual(code, 0, output)
+                del self.env["PARTIAL_INSTALL_FAIL"]
+                self.assertEqual(json.loads(self.state.read_text())["status"], "initializing")
+                staged = (Path(str(self.config) + ".new"), Path(str(self.state) + ".new"),
+                          Path(str(self.unit) + ".new"), self.directory / ".porter.new")
+                for path in staged:
+                    path.write_text('PORTER_ADMIN_PASSWORD="unfinished-secret"\n')
+                code, output = self.uninstall(purge)
+                self.assertEqual(code, 0, output)
+                self.assertNotIn("unfinished-secret", output)
+                for path in staged:
+                    self.assertFalse(path.exists(), str(path))
+                if not purge:
+                    self.assertEqual(json.loads(self.state.read_text())["status"], "uninstalled")
+                self.reset_installation()
+
+    def test_uninstall_rejects_staging_directory_and_symbolic_link_conflicts(self):
+        self.assert_success()
+        staged = (Path(str(self.config) + ".new"), Path(str(self.state) + ".new"),
+                  Path(str(self.unit) + ".new"), self.directory / ".porter.new")
+        for path in staged:
+            for kind in ("directory", "symlink"):
+                with self.subTest(path=str(path), kind=kind):
+                    if kind == "directory":
+                        path.mkdir()
+                        (path / "notes.txt").write_text("未知内容")
+                    else:
+                        path.symlink_to(self.config)
+                    before = self.snapshot()
+                    (self.base / "calls").unlink()
+                    code, output = self.uninstall(True, answers=[])
+                    self.assertNotEqual(code, 0, output)
+                    self.assertEqual(self.snapshot(), before)
+                    self.assertEqual(json.loads(self.state.read_text())["status"], "complete")
+                    self.assertFalse(any(call[0] in ("stop", "disable", "daemon-reload") for call in self.actions("systemctl")))
+                    self.assertFalse(self.actions("rm") or self.actions("userdel") or self.actions("groupdel"))
+                    if kind == "directory":
+                        self.assertEqual((path / "notes.txt").read_text(), "未知内容")
+                        shutil.rmtree(path)
+                    else:
+                        self.assertTrue(path.is_symlink())
+                        path.unlink()
+
+    def test_uninstall_unknown_resources_and_locks_are_preserved(self):
+        for unknown in ("config", "data", "binary", "user", "vendor"):
+            with self.subTest(unknown=unknown):
+                if unknown == "config":
+                    self.config.parent.mkdir()
+                    self.config.write_text("未知配置")
+                elif unknown == "data":
+                    (self.base / "data").mkdir()
+                elif unknown == "binary":
+                    self.directory.mkdir()
+                    (self.directory / "porter").write_text("未知程序")
+                elif unknown == "vendor":
+                    self.env["VENDOR_UNIT"] = "1"
+                else:
+                    (self.base / "user").touch()
+                code, output = self.uninstall(terminal=False)
+                self.assertNotEqual(code, 0, output)
+                self.assertFalse(self.actions("userdel") or self.actions("groupdel") or self.actions("rm"))
+                self.env.pop("VENDOR_UNIT", None)
+                self.reset_installation()
+        self.assert_success()
+        for folder in (self.directory, self.config.parent):
+            lock = folder / ".install-lock"
+            lock.mkdir()
+            code, output = self.uninstall(terminal=False)
+            self.assertNotEqual(code, 0, output)
+            self.assertTrue(lock.exists())
+            self.assertEqual(json.loads(self.state.read_text())["status"], "complete")
+            lock.rmdir()
+
+    def test_uninstall_symbolic_links_and_missing_python_are_rejected(self):
+        self.assert_success()
+        for path in (self.unit, self.state, self.base / "data", self.directory / "porter"):
+            with self.subTest(path=str(path)):
+                moved = Path(str(path) + ".saved")
+                path.rename(moved)
+                path.symlink_to(moved)
+                code, output = self.uninstall(terminal=False)
+                self.assertNotEqual(code, 0, output)
+                self.assertTrue(path.is_symlink() and moved.exists())
+                path.unlink()
+                moved.rename(path)
+        (self.bin / "python3").unlink()
+        code, output = self.uninstall(terminal=False)
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("需要 Python 3", output)
+        self.assertFalse(self.actions("apt-get") or self.actions("dnf"))
+
+    def test_retained_reinstall_failures_are_retryable_and_release_is_required(self):
+        self.assert_success()
+        saved = self.config.read_bytes()
+        self.assertEqual(self.uninstall()[0], 0)
+        self.env["DOWNLOAD_FAIL"] = "1"
+        code, output = self.run_install(terminal=False)
+        self.assertNotEqual(code, 0, output)
+        self.assertEqual(self.config.read_bytes(), saved)
+        self.assertEqual(json.loads(self.state.read_text())["status"], "uninstalled")
+        del self.env["DOWNLOAD_FAIL"]
+        self.env["START_FAIL"] = "1"
+        code, output = self.run_install(terminal=False)
+        self.assertNotEqual(code, 0, output)
+        self.assertEqual(json.loads(self.state.read_text())["status"], "initializing")
+        del self.env["START_FAIL"]
+        self.assert_success(terminal=False)
+        self.assertEqual(self.config.read_bytes(), saved)
+
     def test_pipe_interaction_environment_and_unit(self):
         password = "  密码$${HOME}'\"\\`#尾  "
         output = self.assert_success(self.dialogue("  admin$name  ", password, "[::]:18080"))
@@ -300,7 +729,7 @@ class InstallCase(unittest.TestCase):
         for path in (self.directory, self.etc / "porter", self.base / "data"):
             if path.exists():
                 shutil.rmtree(path)
-        for path in (self.unit, self.base / "calls", self.base / "user", self.base / "group", self.base / "enabled", self.base / "exited"):
+        for path in (self.unit, self.base / "calls", self.base / "user", self.base / "group", self.base / "enabled", self.base / "exited", self.base / "stopped", self.base / "cached_fragment"):
             path.unlink(missing_ok=True)
 
     def test_repeat_keeps_binary_credentials_and_data_without_network(self):

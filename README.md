@@ -16,42 +16,66 @@ Porter uses ordinary proxy connections. The destination sees the forwarding serv
 
 ## Quick start
 
-### 原生一键交互安装
+### Native interactive installation
 
-在使用 systemd 的 Linux 服务器（例如 SSH 终端）执行：
+Run on a Linux server using systemd, such as an SSH terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install.sh | bash
 ```
 
-支持 Ubuntu 22.04/24.04、Debian 12/13、RHEL/Rocky Linux/AlmaLinux 9/10，架构为 amd64、arm64。需要 Bash、下载入口使用的 curl，以及 root 或 sudo 权限。安装器按需从系统仓库补齐 Python 3、curl 和 CA 证书，直接下载 GitHub Actions 编译的独立程序，不需要 Docker、Go 或 Node.js；systemd 必须是 PID 1，普通发行版容器不适用。
+Supports Ubuntu 22.04/24.04, Debian 12/13, RHEL/Rocky Linux/AlmaLinux 9/10 on amd64 and arm64. Requires Bash, curl for the download command, and root or sudo privileges. The installer adds Python 3, curl and CA certificates from the system repositories when needed and downloads a standalone GitHub Release binary. Docker, Go and Node.js are unnecessary. systemd must be PID 1; ordinary distribution containers are unsupported.
 
-首次依次输入**管理员用户名、管理员密码、密码确认、Web 监听地址**。密码隐藏输入，不自动生成或回显。监听必须是 `IPv4:端口` 或 `[IPv6]:端口`，如 `127.0.0.1:18080`、`0.0.0.0:8080`、`[::]:8080`，端口范围为 1–65535。通配监听的远程入口需将输出中的回环地址替换为服务器 IP。管理端口只应开放给可信网络；安装器不配置防火墙或 HTTPS。
+The script first offers **中文 / English**, defaulting to Chinese when you press Enter. Specify `bash -s -- --lang en` or `bash -s -- --lang zh-CN` after the pipe to choose directly. Help is available without a terminal through `bash install.sh --help --lang en`. Installer help, prompts, errors and results follow the chosen language; system command diagnostics retain their original language.
 
-程序目录可包含空格、`$` 和 `%`；受 systemd 路径限制，不接受引号或反斜线；也不能位于 `/var/lib/porter` 数据目录或 `/etc/porter` 配置目录内。默认安装最新正式 [GitHub Release](https://github.com/lwl0820/porter/releases)，也可指定已发布版本及程序目录：
+First installation asks for an **admin username, hidden password, password confirmation and Web listen address**. Passwords are neither generated nor echoed. Use a complete `IPv4:port` or `[IPv6]:port`, such as `127.0.0.1:18080`, `0.0.0.0:8080` or `[::]:8080`, with a port from 1 to 65535. For remote access to a wildcard address, replace the displayed loopback IP with the server IP. Restrict the Web port to trusted networks; the installer does not configure a firewall or HTTPS.
+
+The program directory supports spaces, `$` and `%`, but cannot contain quotes or backslashes due to systemd path restrictions. It cannot be inside `/var/lib/porter` or `/etc/porter`. By default the latest stable [GitHub Release](https://github.com/lwl0820/porter/releases) is installed. To specify a published version and directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install.sh | \
-  bash -s -- --version v1.0.0 --install-dir /opt/porter
+  bash -s -- --version v1.0.0 --install-dir /opt/porter --lang en
 ```
 
-**公开 Release 尚未发布时，安装器会明确报错，latest API 可能返回 404。** 当前发布流程仅在版本标签通过验证和镜像发布后创建二进制 Release；推送 main 发布的镜像不等于可下载的二进制。安装器下载 `porter-版本-linux-架构.tar.gz` 与 `SHA256SUMS`，严格校验对应文件摘要后才安装，不在服务器编译。
+**The installer reports an error if no public Release exists; the latest API may return 404.** Binary Releases are published only after version tags pass validation and image publication. A main-branch container image does not imply a downloadable binary exists. The installer downloads `porter-VERSION-linux-ARCH.tar.gz` and `SHA256SUMS`, validates the exact archive checksum, and never compiles on the server.
 
-默认文件和服务如下；`--install-dir` 只改变程序目录：
+Default files and service; `--install-dir` changes only the program directory:
 
-| 项目 | 位置 |
+| Resource | Location |
 | --- | --- |
-| 程序 | `/opt/porter/porter` |
-| 管理员及监听配置 | `/etc/porter/porter.env`，权限 `600` |
-| 安装记录 | `/etc/porter/install.json`，权限 `600` |
-| SQLite 及日志文件 | `/var/lib/porter`，专用用户可写 |
+| Program | `/opt/porter/porter` |
+| Admin and listen configuration | `/etc/porter/porter.env`, mode `600` |
+| Installation record | `/etc/porter/install.json`, mode `600` |
+| SQLite and journal files | `/var/lib/porter`, writable by the service user |
 | systemd unit | `/etc/systemd/system/porter.service` |
 
-服务以禁止登录的专用系统用户和组 `porter` 运行，限制能力为 `CAP_NET_BIND_SERVICE`，支持低端口绑定、异常重启和开机启动。配置按 systemd `EnvironmentFile` 格式保存，值统一使用双引号，内部的反斜线、双引号、美元符和反引号需要加反斜线；例如字面 `$` 写作 `\$`、字面 `\` 写作 `\\`。不要 `source` 此文件，也不要按 Compose 规则写 `$$`。需要额外环境变量时，可按相同双引号格式追加 `PORTER_COOKIE_SECURE="true"` 等 `PORTER_*` 项。修改配置后执行 `sudo systemctl restart porter.service`。
+The dedicated non-login `porter` user/group runs the service with only `CAP_NET_BIND_SERVICE`, supporting low ports, restart on failure and startup at boot. Configuration uses systemd `EnvironmentFile` syntax: double-quoted values with backslashes before literal backslashes, double quotes, dollar signs and backticks. For example, write a literal `$` as `\$` and a literal `\` as `\\`. Do not source this file or use Compose-style `$$`. Additional `PORTER_*` settings, such as `PORTER_COOKIE_SECURE="true"`, may be appended with the same quoting. Restart with `sudo systemctl restart porter.service` after editing.
 
-重复运行相同目录的安装命令会保留账号、监听地址、程序和数据库，不自动升级；首次局部失败可重试，已保存凭据会复用。已有安装不接受不同的 `--version`。发现未知的同名账号、服务、配置或数据时会退出，不自动接管；也不迁移已有 Docker 数据。仅在服务已启动、已启用且用户指定地址的 `/healthz` 就绪后报告成功。
+Repeating installation in the same directory preserves credentials, listen address, program and database without upgrading. Partial installation failures can be retried using saved credentials. An existing installation rejects a different `--version`. Unknown existing users, services, configuration or data are never taken over; Docker data is not migrated. Success requires an active, enabled service and an exact healthy `/healthz` response at the configured address.
 
-以下命令供 sudo 账号使用，root 用户去掉 `sudo`：
+The installer prints both user `/user/` and administrator `/admin/` URLs. The root URL opens the ordinary user portal. Administrators create ordinary user accounts in the admin portal.
+
+Uninstall with the current script. Uninstall needs Python 3 already installed, but does not fetch Releases, install dependencies or request administrator credentials. It detects a custom program directory from the installation record; an explicit `--install-dir` must match:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install.sh | \
+  bash -s -- --uninstall --lang en
+```
+
+Review the resource list and type `yes` to confirm, or Enter to cancel. By default uninstall stops and disables the service and removes the managed binary and unit. It retains the **entire** `/var/lib/porter` directory, `/etc/porter/porter.env`, the restricted installation record and the dedicated service account/group. Reinstall with the current script and the original program directory to reuse credentials, listen address and databases. It downloads the **same recorded version**, which must still be available as a Release; a failed download preserves configuration and data. Older scripts do not recognize the uninstalled state and must not be used for recovery. After an interrupted uninstall, retry the same uninstall options before reinstalling.
+
+To permanently remove accounts, rules and statistics, add `--purge`. After `yes`, a second confirmation requires typing `DELETE`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install.sh | \
+  bash -s -- --uninstall --purge --lang en
+```
+
+Purge removes managed configuration, the entire data directory, installation record and dedicated user/group. Both uninstall modes remove the installer's uncommitted `porter.env.new`, `install.json.new`, `porter.service.new` and `.porter.new` files after validating their paths and file types. Other extra files in the program and configuration directories are preserved. Cancellation or absence of an interactive terminal does not start uninstall. Unknown services, modified units, systemd drop-ins, symbolic links and mismatched accounts are rejected. Shared logs, system packages and Docker resources are retained. `--purge` requires `--uninstall`; uninstall rejects `--version`.
+
+A forced interruption may leave historical `.tmp` contents in the program directory, potentially including temporary configuration or credential copies. Both uninstall modes preserve these files because their ownership cannot be confirmed. Inspect them before removing them manually; purge does not remove unknown historical copies.
+
+For sudo users (omit `sudo` when running as root):
 
 ```bash
 sudo systemctl status porter.service
@@ -60,7 +84,7 @@ sudo systemctl stop porter.service
 sudo systemctl start porter.service
 ```
 
-原生实例升级前先停服务并备份完整数据目录、配置、unit 和原程序；不要复制运行中的单个数据库文件。默认安装位置可使用：
+Before a native upgrade, stop the service and back up the complete data directory, configuration, unit and binary. Do not copy just a live database file. For the default locations:
 
 ```bash
 sudo systemctl stop porter.service
@@ -71,7 +95,7 @@ sudo chmod 0600 "$PWD/backups/porter-before-upgrade.tar.gz"
 sudo cp /opt/porter/porter "$PWD/backups/porter.previous"
 ```
 
-随后从目标版本 Release 下载本机架构的压缩包和 `SHA256SUMS`，在独立的 `.tmp/porter-upgrade` 目录用 `sha256sum --ignore-missing -c SHA256SUMS` 确认该压缩包校验成功，再解出其中的 `porter`。不要通过重跑一键命令升级。将下方源路径替换为校验后程序的位置，自定义安装目录时同步修改目标路径：
+Download the target architecture archive and `SHA256SUMS` from the target Release into a separate `.tmp/porter-upgrade` directory. Verify the archive with `sha256sum --ignore-missing -c SHA256SUMS`, then extract its `porter` binary. Rerunning the installer does not upgrade. Replace the source path below with the verified binary, and adjust the destination for a custom installation:
 
 ```bash
 sudo install -m 0755 .tmp/porter-upgrade/porter /opt/porter/porter.new
@@ -80,7 +104,7 @@ sudo systemctl start porter.service
 sudo journalctl -u porter.service -n 30 --no-pager
 ```
 
-重启后验证登录、健康端点及实际 TCP/UDP 收发。显式升级后如继续使用安装器，请将 `/etc/porter/install.json` 的 `version` 同步为实际版本标签，保留其余字段和 `600` 权限。回退时先停服务，同时恢复原程序与匹配的**完整数据及配置备份**；旧程序不能直接使用已升级的数据库。上述原生操作与下方 Docker 卷备份相互独立。
+Verify login, health and real TCP/UDP traffic. After a manual upgrade, update only the `version` field in `/etc/porter/install.json` to the actual release tag, keeping the remaining fields and mode `600`. For rollback, stop the service and restore the previous binary with its matching **complete data and configuration backup**; an older binary cannot use an upgraded database. Native backups are separate from the Docker volume backups below.
 
 ### 手工 Compose 部署
 
@@ -122,7 +146,7 @@ docker compose up -d
 docker compose logs -f porter
 ```
 
-Open `http://SERVER_IP:8080/admin/` on your trusted management network and sign in as `admin` using your configured password. Ordinary users use `http://SERVER_IP:8080/user/`; the root URL redirects to the admin portal. Change the username directly in `compose.yaml`. To use Web port 18080, change `PORTER_HTTP_ADDR` to `"0.0.0.0:18080"`, then access `http://SERVER_IP:18080`. Host networking uses the configured port directly and needs no `ports` mapping.
+Open `http://SERVER_IP:8080/admin/` on your trusted management network and sign in as `admin` using your configured password. Ordinary users use `http://SERVER_IP:8080/user/`; the root URL redirects to the ordinary user portal. Change the username directly in `compose.yaml`. To use Web port 18080, change `PORTER_HTTP_ADDR` to `"0.0.0.0:18080"`, then access `http://SERVER_IP:18080`. Host networking uses the configured port directly and needs no `ports` mapping.
 
 Allow the management port only from your management network. For management over the internet, use an external HTTPS reverse proxy, bind `PORTER_HTTP_ADDR` to its trusted backend interface, and set `PORTER_COOKIE_SECURE: "true"`. The reverse proxy must preserve the browser-facing `Host` header: Porter compares the request's Origin with Host and does not trust forwarded headers. Business TCP/UDP traffic is encrypted only when its own protocol provides encryption. Allow required forwarding ports in the server firewall and any cloud security group yourself.
 

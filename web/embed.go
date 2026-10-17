@@ -25,7 +25,7 @@ func Handler() http.Handler {
 			return
 		}
 		if r.URL.Path == "/" {
-			http.Redirect(w, r, "/admin/", http.StatusFound)
+			http.Redirect(w, r, "/user/", http.StatusFound)
 			return
 		}
 		if r.URL.Path == "/admin" || r.URL.Path == "/user" {
