@@ -322,3 +322,37 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 13: 修复发布CI的异步计量与端口夹具偶发失败
+<!-- trellis-session: v=2 fp=42fe073650172858 -->
+
+**Date**: 2026-10-18
+**Task**: 修复发布CI的异步计量与端口夹具偶发失败
+**Branch**: `codex/fix-quota-test-synchronization`
+
+### Summary
+
+定位v0.4.0 arm64 Docker标签配额测试过早断言，补齐四处双向计量同步；重复测试实证并修复目标端口与规则范围重叠。最终本地多轮及独立检查通过，按授权准备main合并和v0.4.1推送，随后观察双架构Actions与Release实际结果。
+
+### Main Changes
+
+- 仅修改quota_runtime_test.go及规范/记录，保留所有业务断言，不改生产逻辑与已有标签。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c95a363` | fix: 稳定异步配额测试与目标端口分配 |
+
+### Testing
+
+- [OK] 最终hash 65957afd：普通GOMAXPROCS1/2三用例各50轮、race2三用例10轮、Docker聚合100轮均通过；独立最终rules race/标签和vet通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 合并main、删除开发分支、推送v0.4.1并持续确认远端发布；保留初始无关未跟踪文件。
