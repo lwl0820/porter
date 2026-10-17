@@ -1,0 +1,41 @@
+{
+  "工具": "内置 image_gen",
+  "图像": [
+    {
+      "id": "a-user",
+      "source": "/home/user/.codex/generated_images/01a14b02-0c48-71a0-bf1e-eb3d34aa16f4/exec-d39b3d70-45c4-489c-94fc-0da8bfc96455.png",
+      "file": "a-user.png",
+      "prompt_file": "prompts.json"
+    },
+    {
+      "id": "a-admin",
+      "source": "/home/user/.codex/generated_images/01a14b02-0c48-71a0-bf1e-eb3d34aa16f4/exec-4d2cc7f1-01cf-4b9e-89c9-fa620a98aafa.png",
+      "file": "a-admin.png",
+      "prompt_file": "retry-prompts.json"
+    },
+    {
+      "id": "b-admin",
+      "source": "/home/user/.codex/generated_images/01a14b02-0c48-71a0-bf1e-eb3d34aa16f4/exec-e2fc6623-7087-4ac3-93ae-1e791cddfb69.png",
+      "file": "b-admin.png",
+      "prompt_file": "retry-prompts.json"
+    },
+    {
+      "id": "b-user",
+      "source": "/home/user/.codex/generated_images/01a14b02-0c48-71a0-bf1e-eb3d34aa16f4/exec-1d457904-e800-44ea-84cf-bbeec1fb5c3f.png",
+      "file": "b-user.png",
+      "prompt_file": "retry-prompts.json"
+    },
+    {
+      "id": "c-admin",
+      "source": "/home/user/.codex/generated_images/01a14b02-0c48-71a0-bf1e-eb3d34aa16f4/exec-08a1ba44-7e2f-461b-84ed-09f2a29cb37b.png",
+      "file": "c-admin.png",
+      "prompt_file": "retry-prompts.json"
+    },
+    {
+      "id": "c-user",
+      "source": "/home/user/.codex/generated_images/01a14b02-0c48-71a0-bf1e-eb3d34aa16f4/exec-5e8c4027-2413-43ba-9b0f-76ae1e6df967.png",
+      "file": "c-user.png",
+      "prompt_file": "retry-prompts.json"
+    }
+  ]
+}

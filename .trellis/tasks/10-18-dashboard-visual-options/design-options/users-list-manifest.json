@@ -1,0 +1,26 @@
+{
+  "工具": "内置 image_gen",
+  "图像": [
+    {
+      "id": "a-users-list-v2",
+      "source": "/home/user/.codex/generated_images/01a14b02-0c48-71a0-bf1e-eb3d34aa16f4/exec-2a09f821-8d19-4522-84fb-17894d3f654c.png",
+      "file": "a-users-list-v2.png",
+      "prompt_file": "users-list-prompts.json",
+      "替代": "原对应管理端设计板第4格"
+    },
+    {
+      "id": "b-users-list-v2",
+      "source": "/home/user/.codex/generated_images/01a14b02-0c48-71a0-bf1e-eb3d34aa16f4/exec-3ee86d8c-bcb5-4193-8fee-1d1c82891c94.png",
+      "file": "b-users-list-v2.png",
+      "prompt_file": "users-list-prompts.json",
+      "替代": "原对应管理端设计板第4格"
+    },
+    {
+      "id": "c-users-list-v2",
+      "source": "/home/user/.codex/generated_images/01a14b02-0c48-71a0-bf1e-eb3d34aa16f4/exec-dc8780a2-c85e-4fe2-849e-29d6c435ed5f.png",
+      "file": "c-users-list-v2.png",
+      "prompt_file": "users-list-prompts.json",
+      "替代": "原对应管理端设计板第4格"
+    }
+  ]
+}
