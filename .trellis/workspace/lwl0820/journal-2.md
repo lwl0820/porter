@@ -356,3 +356,38 @@
 ### Next Steps
 
 - 合并main、删除开发分支、推送v0.4.1并持续确认远端发布；保留初始无关未跟踪文件。
+
+
+## Session 14: Web与命令行按需安装及安全切换
+<!-- trellis-session: v=2 fp=060c01087b99ab12 -->
+
+**Date**: 2026-10-18
+**Task**: Web与命令行按需安装及安全切换
+**Branch**: `codex/optional-web-cli`
+
+### Summary
+
+实现三模式默认双开至少一项、纯CLI免Web配置、安装后同版六方向切换、schema3及备份回退；服务/CLI/安装独立检查与真实Bash联动通过。完成归档与记录后按用户授权合并main、删除开发分支、推送v0.5.0，持续确认最终远端全套CI及Release。
+
+### Main Changes
+
+- Web/CLI条件启动及无副作用配置预检；schema3、CLI语言保存、同版切换与完整事务恢复；真实帮助stderr和锁后挂载诊断均已修复。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1bb4609` | feat: 支持Web与命令行按需安装和切换 |
+| `9f618da` | docs: 固化可选管理组件与恢复验收契约 |
+
+### Testing
+
+- [OK] 本地完整70阶段69过/1诊断失败已修；最终挂载4场景和10项直接影响增量全过；最终真实Bash六方向及真实启动失败回退通过；同hash Go race/vet/标签、真实root/PTY与完整Docker smoke和双架构静态包通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 按授权推送v0.5.0并观察双架构Actions、镜像与Release实际成功；未覆盖真实宿主systemd与arm64实机。
