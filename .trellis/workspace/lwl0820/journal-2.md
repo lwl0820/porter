@@ -283,3 +283,42 @@
 ### 后续步骤
 
 - 按授权将开发分支快进合并main，删除开发分支，创建v0.3.0标签，原子推送主分支和标签并核对远端。
+
+
+## Session 12: 双程序CLI与原生安装升级交付
+<!-- trellis-session: v=2 fp=df4d187473167dfa -->
+
+**Date**: 2026-10-18
+**Task**: 双程序CLI与原生安装升级交付
+**Branch**: `codex/native-cli-install-improvements`
+
+### Summary
+
+完成双程序拆分、语言持久化、PATH、原生升级回退与purge清理；独立检查及基线/增量/真实进程/Docker验证通过，按用户授权进入v0.4.0发布收尾。
+
+### Main Changes
+
+本轮按用户批准方案完成双程序交付，用户明确授权完成后合并main、删除开发分支、打tag推送，发布目标v0.4.0。
+
+- porter为原生root/sudo双语规则客户端，porterd为服务；共享控制协议，客户端不引用数据库/Web，Docker只编译服务和控制stub。
+- CLI首次选择1English/2中文、回车英文，保存/etc/porter/cli.json；显式--lang仅当次，菜单可切换保存；普通卸载保留，purge精确清理正式服务/CLI配置。
+- 安装器英文默认、系统/usr/bin/porter托管链接、schema2与旧schema1兼容、显式--upgrade、完整数据/程序/unit/state/config备份及失败/中断恢复；目录锁受限owner及并发残锁回收。
+- 独立检查修复帮助样式字段值误识别、损坏锁/恢复JSON校验、回退owner/mode、sudo路径测试、真实版本核对和卸载SIGKILL重入等。
+- 数据目录自身为挂载根时不能整体rename回退，新增停服前mountinfo精确拒绝（含ismount漏掉的同fs bind mount）；父目录独立FS允许。历史备份与失败数据副本保留，提示及README说明实际位置。
+- 单文件后端规范超上下文注入上限，已无损拆出native-install-contracts并同步index/manifests；不修改Trellis运行时。
+
+验证：实施者54项完整基线481.503秒、独立冻结54项468.257秒；最终挂载增量4项、purge提示增量2项分别独立验证，最终不是单一hash的56项一次全套。另通过真实root/nonroot socket race、30轮锁并发、强中断/回退重入、完整Go race/vet/标签/integration、实际包双进程/TTY/PATH三协议CRUD及语言持久化、systemd-analyze静态unit、amd64/arm64双程序CGO0发行包和最终Docker完整smoke。真实systemd宿主与arm64运行未实测。
+
+产品提交cd5fc8f，规范/规划/验收提交1e99473。任务已精确归档，归档/日志均--no-commit手工窄范围暂存，保留初始未知平台与历史任务文件。当前完成归档及会话记录后，按用户授权执行main快进合并、删除开发分支并原子推送main+注释标签v0.4.0；最终远端及Actions实际阶段以本轮最终答复核对为准，标签不等同Release资产就绪。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cd5fc8f` | feat: 拆分服务端与命令行并完善原生安装升级 |
+| `1e99473` | docs: 固化双程序安装与CLI语言管理契约 |
+
+### Status
+
+[OK] **Completed**
