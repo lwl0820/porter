@@ -19,6 +19,7 @@ const form = reactive({
   target_host: props.rule?.target_host ?? "",
   target_port: String(props.rule?.target_port ?? ""),
   enabled: props.rule?.enabled ?? true,
+  traffic_enabled: props.rule?.traffic_enabled ?? false,
 });
 const fields = ref<FieldErrors>({});
 const error = ref("");
@@ -90,6 +91,7 @@ async function submit(): Promise<void> {
       target_host: form.target_host.trim(),
       target_port: Number(form.target_port),
       enabled: form.enabled,
+      traffic_enabled: form.traffic_enabled,
     });
     saved = true;
   } catch (failure) {
@@ -271,6 +273,10 @@ async function submit(): Promise<void> {
               </p>
             </div>
           </div>
+          <label class="enable-field">
+            <span><strong>流量统计</strong><span>记录上下行流量与速度</span></span>
+            <input v-model="form.traffic_enabled" type="checkbox" class="toggle-input" aria-label="流量统计" />
+          </label>
           <label class="enable-field"
             ><span
               ><strong>启用规则</strong
@@ -280,7 +286,7 @@ async function submit(): Promise<void> {
         </fieldset>
         <div v-if="rule" class="notice subtle">
           <Icon name="alert" :size="18" /><span
-            >修改转发参数会断开该规则的现有会话。仅修改名称不会影响转发。</span
+            >修改转发参数会断开该规则的现有会话。仅修改名称或流量统计不会影响转发。</span
           >
         </div>
       </div>

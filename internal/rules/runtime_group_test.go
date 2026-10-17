@@ -52,7 +52,7 @@ func groupService(t *testing.T) (*Service, *signalledRuntime, *signalledRuntime)
 	s.mu.Lock()
 	s.startGroup(r.ID, g)
 	s.mu.Unlock()
-	t.Cleanup(s.Close)
+	t.Cleanup(func() { _ = s.Close() })
 	return s, tcp, udp
 }
 
@@ -86,7 +86,7 @@ func TestConcurrentGroupFailureAndServiceClose(t *testing.T) {
 	for range 32 {
 		s, tcp, udp := groupService(t)
 		var wg sync.WaitGroup
-		for _, action := range []func(){tcp.fail, udp.fail, s.Close} {
+		for _, action := range []func(){tcp.fail, udp.fail, func() { _ = s.Close() }} {
 			wg.Add(1)
 			go func() { defer wg.Done(); action() }()
 		}

@@ -80,7 +80,7 @@ func TestVersionOneMigrationPreservesRecordsAndObjects(t *testing.T) {
 		}
 	}
 	inspection := fixtureDB(t, path)
-	assertVersion(t, inspection, 2)
+	assertVersion(t, inspection, 3)
 	var rawCreated, rawUpdated string
 	if err = inspection.QueryRow("SELECT created_at,updated_at FROM rules WHERE id='old-tcp'").Scan(&rawCreated, &rawUpdated); err != nil || rawCreated != created || rawUpdated != updated {
 		t.Fatalf("原始时间文本变化：%q %q %v", rawCreated, rawUpdated, err)
@@ -113,7 +113,7 @@ func TestFreshAndVersionTwoDatabaseSupportCombinedProtocol(t *testing.T) {
 	}
 	db.Close()
 	inspection := fixtureDB(t, path)
-	assertVersion(t, inspection, 2)
+	assertVersion(t, inspection, 3)
 	execute(t, inspection, "CREATE TABLE version_two_marker(value TEXT); INSERT INTO version_two_marker VALUES('保留')")
 	inspection.Close()
 	db, err = store.Open(path)
@@ -131,7 +131,7 @@ func TestFreshAndVersionTwoDatabaseSupportCombinedProtocol(t *testing.T) {
 		t.Fatalf("版本 2 重开不应重建已有结构：%q %v", marker, err)
 	}
 	for _, statement := range []string{
-		"INSERT INTO rules SELECT 'duplicate',name,protocol,listen_host,listen_port,target_host,target_port,enabled,revision,created_at,updated_at FROM rules WHERE id='both'",
+		"INSERT INTO rules SELECT 'duplicate',name,protocol,listen_host,listen_port,target_host,target_port,enabled,revision,created_at,updated_at,traffic_enabled FROM rules WHERE id='both'",
 		"UPDATE rules SET protocol='invalid' WHERE id='both'",
 		"UPDATE rules SET listen_port=0 WHERE id='both'",
 		"UPDATE rules SET target_port=65536 WHERE id='both'",
@@ -185,7 +185,7 @@ func TestUnsafeCustomSchemaAndFutureVersionsAreRejected(t *testing.T) {
 		{"新增列", "ALTER TABLE rules ADD COLUMN custom_value TEXT", "字段"},
 		{"生成列", "ALTER TABLE rules ADD COLUMN custom_value TEXT GENERATED ALWAYS AS (name) VIRTUAL", "字段"},
 		{"外部外键", "CREATE TABLE reference_rule(rule_id TEXT REFERENCES rules(id))", "外键"},
-		{"未来版本", "PRAGMA user_version=3", "版本"},
+		{"未来版本", "PRAGMA user_version=4", "版本"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(testutil.TempDir(t), "custom.db")
@@ -204,7 +204,7 @@ func TestUnsafeCustomSchemaAndFutureVersionsAreRejected(t *testing.T) {
 			inspection := fixtureDB(t, path)
 			expectedVersion := 1
 			if test.name == "未来版本" {
-				expectedVersion = 3
+				expectedVersion = 4
 			}
 			assertVersion(t, inspection, expectedVersion)
 		})

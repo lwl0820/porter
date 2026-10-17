@@ -2022,3 +2022,28 @@ td:last-child {
     scroll-behavior: auto !important;
   }
 }
+
+.rule-traffic {
+  min-width: 204px;
+  font-size: 11px;
+  color: #7b879b;
+  font-variant-numeric: tabular-nums;
+}
+.traffic-heading, .traffic-direction {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.traffic-heading { margin-bottom: 7px; font-size: 10px; }
+.traffic-heading .text-button { font-size: 10px; padding: 0; white-space: nowrap; }
+.traffic-direction { margin-top: 5px; white-space: nowrap; }
+.traffic-direction strong { color: #46536b; font-weight: 500; }
+.desktop-table table { min-width: 1120px; }
+.desktop-table th:first-child { width: 16%; }
+.desktop-table th:nth-child(2) { width: 9%; }
+.desktop-table th:nth-child(3), .desktop-table th:nth-child(5) { width: 16%; }
+.desktop-table th:nth-child(6) { width: 11%; }
+.desktop-table th:nth-child(7) { width: 22%; }
+.desktop-table th:last-child { width: 15%; }
+.rule-card > .rule-traffic { padding: 16px 0; border-top: 1px solid #edf0f5; }

@@ -441,7 +441,7 @@ func TestCombinedRestoreFailureReleasesPeerAndRetryRecovers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(restored.Close)
+			t.Cleanup(func() { _ = restored.Close() })
 			for _, r := range restored.List() {
 				if r.ID == combined.ID && (r.Status != "error" || !strings.Contains(r.LastError, strings.ToUpper(blocked))) {
 					t.Fatalf("半恢复的组合未整体报错：%+v", r)

@@ -23,6 +23,8 @@ type Repository interface {
 	List(context.Context) ([]model.Rule, error)
 	Save(context.Context, model.Rule, bool) error
 	Delete(context.Context, string) error
+	SaveTraffic(context.Context, map[string]model.Traffic) error
+	ResetTraffic(context.Context, model.Rule) error
 }
 type Error struct {
 	Status  int
@@ -37,15 +39,21 @@ func problem(status int, code, message string) *Error {
 }
 
 type Service struct {
-	mu        sync.Mutex
-	repo      Repository
-	engine    *forward.Engine
-	items     map[string]model.Rule
-	running   map[string]*runtimeGroup
-	monitors  sync.WaitGroup
-	adminHost netip.Addr
-	adminPort int
-	closed    bool
+	mu          sync.Mutex
+	repo        Repository
+	engine      *forward.Engine
+	items       map[string]model.Rule
+	running     map[string]*runtimeGroup
+	monitors    sync.WaitGroup
+	adminHost   netip.Addr
+	adminPort   int
+	closed      bool
+	traffic     map[string]*forward.Traffic
+	persisted   map[string]model.Traffic
+	stopTraffic chan struct{}
+	trafficDone chan struct{}
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 func New(ctx context.Context, repo Repository, engine *forward.Engine, adminAddr string) (*Service, error) {
@@ -65,20 +73,22 @@ func New(ctx context.Context, repo Repository, engine *forward.Engine, adminAddr
 	if err != nil {
 		return nil, fmt.Errorf("管理监听地址必须是 IP：%w", err)
 	}
-	s := &Service{repo: repo, engine: engine, items: make(map[string]model.Rule), running: make(map[string]*runtimeGroup), adminHost: addr.Unmap(), adminPort: port}
+	s := &Service{repo: repo, engine: engine, items: make(map[string]model.Rule), running: make(map[string]*runtimeGroup), adminHost: addr.Unmap(), adminPort: port, traffic: make(map[string]*forward.Traffic), persisted: make(map[string]model.Traffic), stopTraffic: make(chan struct{}), trafficDone: make(chan struct{})}
 	items, err := repo.List(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for _, r := range items {
 		s.items[r.ID] = r
+		s.traffic[r.ID] = forward.NewTraffic(r.TrafficEnabled, r.Traffic, time.Now())
+		s.persisted[r.ID] = r.Traffic
 	}
 	s.mu.Lock()
 	for _, r := range items {
 		if !r.Enabled {
 			continue
 		}
-		input := model.Input{Name: r.Name, Protocol: r.Protocol, ListenHost: r.ListenHost, ListenPort: r.ListenPort, TargetHost: r.TargetHost, TargetPort: r.TargetPort, Enabled: &r.Enabled}
+		input := model.Input{Name: r.Name, Protocol: r.Protocol, ListenHost: r.ListenHost, ListenPort: r.ListenPort, TargetHost: r.TargetHost, TargetPort: r.TargetPort, Enabled: &r.Enabled, TrafficEnabled: &r.TrafficEnabled}
 		if _, err = s.validate(input, r.ID); err != nil {
 			s.setError(r, err)
 			continue
@@ -91,6 +101,7 @@ func New(ctx context.Context, repo Repository, engine *forward.Engine, adminAddr
 		s.startGroup(r.ID, group)
 	}
 	s.mu.Unlock()
+	go s.trafficLoop()
 	return s, nil
 }
 
@@ -118,7 +129,16 @@ func (s *Service) List() []model.Rule {
 	return items
 }
 
-func (s *Service) view(r model.Rule) model.Rule {
+func (s *Service) view(r model.Rule) (result model.Rule) {
+	defer func() {
+		if t := s.traffic[result.ID]; t != nil {
+			result.Traffic = t.Snapshot()
+		}
+		if !result.TrafficEnabled || result.Status != "running" {
+			result.Traffic.UploadBytesPerSecond = 0
+			result.Traffic.DownloadBytesPerSecond = 0
+		}
+	}()
 	if !r.Enabled {
 		r.Status = "disabled"
 		r.LastError = ""
@@ -166,6 +186,9 @@ func (s *Service) Save(ctx context.Context, id string, revision int64, input mod
 	if err != nil {
 		return model.Rule{}, err
 	}
+	if input.TrafficEnabled == nil {
+		r.TrafficEnabled = old.TrafficEnabled
+	}
 	now := time.Now().UTC()
 	r.ID = id
 	r.Revision = old.Revision + 1
@@ -178,6 +201,15 @@ func (s *Service) Save(ctx context.Context, id string, revision int64, input mod
 		}
 		r.ID = hex.EncodeToString(b[:])
 		r.CreatedAt = now
+	}
+	committed := false
+	if create {
+		s.traffic[r.ID] = forward.NewTraffic(false, model.Traffic{}, now)
+		defer func() {
+			if !committed {
+				delete(s.traffic, r.ID)
+			}
+		}()
 	}
 	previous := s.running[id]
 	if previous != nil {
@@ -203,6 +235,8 @@ func (s *Service) Save(ctx context.Context, id string, revision int64, input mod
 		slog.Error("规则保存失败", "rule_id", id, "error", err)
 		return model.Rule{}, problem(500, "database_error", "规则保存失败，原配置保持不变")
 	}
+	committed = true
+	s.traffic[r.ID].SetEnabled(r.TrafficEnabled, time.Now())
 	if previous != nil {
 		previous.retire()
 		for transport, rt := range previous.members {
@@ -250,6 +284,8 @@ func (s *Service) Delete(ctx context.Context, id string, revision int64) error {
 	}
 	delete(s.running, id)
 	delete(s.items, id)
+	delete(s.traffic, id)
+	delete(s.persisted, id)
 	slog.Info("规则已删除", "rule_id", id)
 	return nil
 }
@@ -277,7 +313,7 @@ func (s *Service) Retry(id string, revision int64) (model.Rule, error) {
 		group.stop()
 		delete(s.running, id)
 	}
-	in := model.Input{Name: r.Name, Protocol: r.Protocol, ListenHost: r.ListenHost, ListenPort: r.ListenPort, TargetHost: r.TargetHost, TargetPort: r.TargetPort, Enabled: &r.Enabled}
+	in := model.Input{Name: r.Name, Protocol: r.Protocol, ListenHost: r.ListenHost, ListenPort: r.ListenPort, TargetHost: r.TargetHost, TargetPort: r.TargetPort, Enabled: &r.Enabled, TrafficEnabled: &r.TrafficEnabled}
 	if _, err := s.validate(in, id); err != nil {
 		return model.Rule{}, err
 	}
@@ -290,21 +326,39 @@ func (s *Service) Retry(id string, revision int64) (model.Rule, error) {
 	return s.view(r), nil
 }
 
-func (s *Service) Close() {
-	s.mu.Lock()
-	s.closed = true
-	for id, group := range s.running {
-		group.stop()
-		delete(s.running, id)
-	}
-	s.mu.Unlock()
-	s.monitors.Wait()
+func (s *Service) Close() error {
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		if s.stopTraffic != nil {
+			close(s.stopTraffic)
+		}
+		s.mu.Unlock()
+		if s.trafficDone != nil {
+			<-s.trafficDone
+		}
+		s.mu.Lock()
+		for id, group := range s.running {
+			group.stop()
+			delete(s.running, id)
+		}
+		s.closeErr = s.flushTraffic(context.Background())
+		s.mu.Unlock()
+		s.monitors.Wait()
+		if s.closeErr != nil {
+			slog.Error("退出时流量统计保存失败", "error", s.closeErr)
+		}
+	})
+	return s.closeErr
 }
 
 func (s *Service) validate(in model.Input, id string) (model.Rule, error) {
 	r := model.Rule{Name: strings.TrimSpace(in.Name), Protocol: strings.ToLower(strings.TrimSpace(in.Protocol)), ListenHost: strings.TrimSpace(in.ListenHost), ListenPort: in.ListenPort, TargetHost: strings.TrimSuffix(strings.TrimSpace(in.TargetHost), "."), TargetPort: in.TargetPort, Enabled: true}
 	if in.Enabled != nil {
 		r.Enabled = *in.Enabled
+	}
+	if in.TrafficEnabled != nil {
+		r.TrafficEnabled = *in.TrafficEnabled
 	}
 	fields := map[string]string{}
 	if n := utf8.RuneCountInString(r.Name); n < 1 || n > 80 || !utf8.ValidString(r.Name) {

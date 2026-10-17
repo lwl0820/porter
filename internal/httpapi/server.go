@@ -41,6 +41,7 @@ func New(service *rules.Service, manager *auth.Manager, db Pinger, secure bool, 
 	mux.HandleFunc("PUT /api/rules/{id}", s.protect(s.update))
 	mux.HandleFunc("DELETE /api/rules/{id}", s.protect(s.remove))
 	mux.HandleFunc("POST /api/rules/{id}/retry", s.protect(s.retry))
+	mux.HandleFunc("POST /api/rules/{id}/traffic/reset", s.protect(s.resetTraffic))
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		failure(w, &rules.Error{Status: 404, Code: "not_found", Message: "接口不存在"})
@@ -260,4 +261,18 @@ func write(w http.ResponseWriter, status int, value any) {
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		slog.Debug("响应写入失败", "error", err)
 	}
+}
+
+func (s *Server) resetTraffic(w http.ResponseWriter, r *http.Request, session auth.Session) {
+	revision, ok := match(w, r)
+	if !ok {
+		return
+	}
+	rule, err := s.rules.ResetTraffic(r.Context(), r.PathValue("id"), revision)
+	if err != nil {
+		failure(w, err)
+		return
+	}
+	w.Header().Set("ETag", etag(rule.Revision))
+	write(w, 200, rule)
 }

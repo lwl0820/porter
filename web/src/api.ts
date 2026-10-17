@@ -38,6 +38,13 @@ function decodeSession(value: unknown): Session {
   return { username: value.username, csrf_token: value.csrf_token };
 }
 
+function byteCount(value: unknown): boolean {
+  return typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value) && value.length <= 19 && BigInt(value) <= 9223372036854775807n;
+}
+function speed(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
 function decodeRule(value: unknown): Rule {
   if (
     !record(value) ||
@@ -49,6 +56,12 @@ function decodeRule(value: unknown): Rule {
     !Number.isInteger(value.listen_port) ||
     !Number.isInteger(value.target_port) ||
     typeof value.enabled !== "boolean" ||
+    typeof value.traffic_enabled !== "boolean" ||
+    !record(value.traffic) ||
+    !byteCount(value.traffic.upload_bytes) ||
+    !byteCount(value.traffic.download_bytes) ||
+    !speed(value.traffic.upload_bytes_per_second) ||
+    !speed(value.traffic.download_bytes_per_second) ||
     !Number.isInteger(value.revision) ||
     typeof value.created_at !== "string" ||
     typeof value.updated_at !== "string" ||
@@ -97,6 +110,7 @@ async function request(
         "target_host",
         "target_port",
         "enabled",
+        "traffic_enabled",
       ] as const) {
         const message = failure.fields[key];
         if (typeof message === "string") fields[key] = message;
@@ -161,6 +175,11 @@ export const api = {
       method: "DELETE",
       headers: revisionHeader(rule.revision),
     });
+  },
+  async resetTraffic(rule: Rule): Promise<Rule> {
+    return decodeRule(await request(`/rules/${encodeURIComponent(rule.id)}/traffic/reset`, {
+      method: "POST", headers: revisionHeader(rule.revision),
+    }));
   },
   async retry(rule: Rule): Promise<Rule> {
     return decodeRule(

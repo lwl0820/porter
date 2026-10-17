@@ -16,6 +16,7 @@ import {
 import Icon from "./components/Icon.vue";
 import Modal from "./components/Modal.vue";
 import RuleActions from "./components/RuleActions.vue";
+import RuleTraffic from "./components/RuleTraffic.vue";
 import RuleEditor from "./components/RuleEditor.vue";
 
 const session = ref<Session>();
@@ -40,6 +41,8 @@ const editorOpen = ref(false);
 const editingRule = ref<Rule>();
 const editorBusy = ref(false);
 const deletingRule = ref<Rule>();
+const resettingRule = ref<Rule>();
+const resetError = ref("");
 const deleteError = ref("");
 const busy = ref("");
 const lastRefresh = ref<Date>();
@@ -99,6 +102,7 @@ function expireSession(): void {
   editorOpen.value = false;
   editorBusy.value = false;
   deletingRule.value = undefined;
+  resettingRule.value = undefined;
   actionError.value = "";
   listError.value = "";
   loginError.value = "登录已过期，请重新登录。";
@@ -233,6 +237,29 @@ async function mutate(
     busy.value = "";
   }
 }
+function confirmReset(rule: Rule): void {
+  resettingRule.value = { ...rule };
+  resetError.value = "";
+}
+async function resetTraffic(): Promise<void> {
+  const rule = resettingRule.value;
+  if (!rule || mutationBusy.value) return;
+  busy.value = rule.id;
+  resetError.value = "";
+  stopListRequest();
+  const version = sessionVersion;
+  try {
+    const result = await api.resetTraffic(rule);
+    if (version !== sessionVersion) return;
+    mergeRule(result);
+    resettingRule.value = undefined;
+    notify("流量已重置");
+  } catch (error) {
+    if (session.value) resetError.value = errorMessage(error);
+  } finally {
+    busy.value = "";
+  }
+}
 function confirmDelete(rule: Rule): void {
   deletingRule.value = { ...rule };
   deleteError.value = "";
@@ -269,7 +296,7 @@ function searchShortcut(event: KeyboardEvent): void {
     event.key !== "/" ||
     !session.value ||
     editorOpen.value ||
-    deletingRule.value
+    deletingRule.value || resettingRule.value
   )
     return;
   const target = event.target;
@@ -293,7 +320,7 @@ onMounted(() => {
     if (
       document.visibilityState === "visible" &&
       !editorOpen.value &&
-      !deletingRule.value
+      !deletingRule.value && !resettingRule.value
     )
       void loadRules();
   }, 5000);
@@ -607,6 +634,7 @@ onUnmounted(() => {
                   <th scope="col" class="direction-cell" />
                   <th scope="col">转发目标</th>
                   <th scope="col">运行状态</th>
+                  <th scope="col">流量与速度</th>
                   <th scope="col" class="operation-heading">操作</th>
                 </tr>
               </thead>
@@ -660,6 +688,7 @@ onUnmounted(() => {
                       >{{ rule.last_error }}</span
                     >
                   </td>
+                  <td class="traffic-cell"><RuleTraffic :rule="rule" :busy="mutationBusy" @reset="confirmReset" /></td>
                   <td>
                     <RuleActions
                       :rule="rule"
@@ -717,6 +746,7 @@ onUnmounted(() => {
               >
                 {{ rule.last_error }}
               </p>
+              <RuleTraffic :rule="rule" :busy="mutationBusy" @reset="confirmReset" />
               <div class="rule-card-footer">
                 <span class="status-badge" :class="rule.status"
                   ><i />{{ statusLabels[rule.status] }}</span
@@ -791,6 +821,18 @@ onUnmounted(() => {
       @close="editorOpen = false"
       @busy="editorBusy = $event"
     />
+    <Modal v-if="resettingRule" label="重置流量" :busy="Boolean(busy)" @close="resettingRule = undefined">
+      <div class="delete-dialog">
+        <h2>重置流量？</h2>
+        <p>确定清空 <strong>{{ resettingRule.name }}</strong> 的上下行累计流量吗？</p>
+        <p class="delete-warning">此操作无法撤销，不会影响转发连接或统计开关。</p>
+        <div v-if="resetError" role="alert" class="notice error">{{ resetError }}</div>
+        <div class="delete-actions">
+          <button class="button secondary" data-autofocus :disabled="Boolean(busy)" @click="resettingRule = undefined">取消</button>
+          <button class="button primary" :disabled="Boolean(busy)" @click="resetTraffic">{{ busy ? "正在重置…" : "确认重置" }}</button>
+        </div>
+      </div>
+    </Modal>
     <Modal
       v-if="deletingRule"
       label="删除规则"

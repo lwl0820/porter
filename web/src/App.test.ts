@@ -13,6 +13,8 @@ const example: Rule = {
   target_host: "app.example.com",
   target_port: 443,
   enabled: true,
+  traffic_enabled: false,
+  traffic: { upload_bytes: "0", download_bytes: "0", upload_bytes_per_second: 0, download_bytes_per_second: 0 },
   revision: 1,
   created_at: "2026-10-16T12:00:00Z",
   updated_at: "2026-10-16T12:00:00Z",
@@ -133,6 +135,11 @@ beforeEach(() => {
         });
         return response(current);
       }
+      if (current && path.endsWith("/traffic/reset")) {
+        current.traffic = { upload_bytes: "0", download_bytes: "0", upload_bytes_per_second: 0, download_bytes_per_second: 0 };
+        current.revision++;
+        return response(current);
+      }
       if (current && path.endsWith("/retry")) {
         current.status = "running";
         current.last_error = "";
@@ -250,6 +257,7 @@ describe("转发规则管理", () => {
       target_host: "10.0.0.2",
       target_port: 53,
       enabled: true,
+      traffic_enabled: false,
     });
     expect(new Headers(created.options.headers).get("X-CSRF-Token")).toBe(
       "csrf-demo",
@@ -391,6 +399,7 @@ describe("TCP+UDP 组合规则", () => {
       target_host: "10.0.0.2",
       target_port: 53,
       enabled: true,
+      traffic_enabled: false,
     });
     expect(wrapper!.findAll(".desktop-table tbody tr")).toHaveLength(1);
     expect(wrapper!.findAll(".mobile-cards .rule-card")).toHaveLength(1);
@@ -553,5 +562,127 @@ describe("TCP+UDP 组合规则", () => {
     expect(wrapper!.get(".desktop-table .rule-name-cell strong").text()).toBe(
       "应用入口",
     );
+  });
+});
+
+describe("流量统计", () => {
+  it("新增默认关闭，编辑保存统计开关并回显", async () => {
+    await start();
+    await button("新增规则").trigger("click");
+    await flushPromises();
+    expect(wrapper!.get<HTMLInputElement>('[aria-label="流量统计"]').element.checked).toBe(false);
+    await button("取消").trigger("click");
+    await wrapper!.get('.desktop-table [aria-label="编辑 应用入口"]').trigger("click");
+    await flushPromises();
+    await wrapper!.get('[aria-label="流量统计"]').setValue(true);
+    await wrapper!.get(".editor").trigger("submit");
+    await flushPromises();
+    const update = calls.find((call) => call.options.method === "PUT")!;
+    expect(JSON.parse(String(update.options.body)).traffic_enabled).toBe(true);
+    expect(wrapper!.text()).toContain("累计流量 · 当前速度");
+    await wrapper!.get('.desktop-table [aria-label="编辑 应用入口"]').trigger("click");
+    await flushPromises();
+    expect(wrapper!.get<HTMLInputElement>('[aria-label="流量统计"]').element.checked).toBe(true);
+  });
+
+  it("桌面和窄屏显示上下行累计量、速度与关闭状态", async () => {
+    records[0]!.traffic = { upload_bytes: "2048", download_bytes: "4096", upload_bytes_per_second: 0, download_bytes_per_second: 0 };
+    await start();
+    for (const surface of [".desktop-table", ".mobile-cards"]) {
+      const region = wrapper!.get(surface);
+      expect(region.text()).toContain("统计已关闭");
+      expect(region.text()).toContain("上行2.0 KiB0 B/s");
+      expect(region.text()).toContain("下行4.0 KiB0 B/s");
+      expect(region.get(".traffic-direction strong").attributes("title")).toBe("2048 B");
+      expect(region.get(".rule-traffic button").attributes("aria-label")).toBe("重置 应用入口 的流量");
+    }
+  });
+
+  it("取消不重置，成功重置后后续写入使用新版本", async () => {
+    records[0]!.traffic = { ...example.traffic, upload_bytes: "1234" };
+    await start();
+    await button("重置流量").trigger("click");
+    await flushPromises();
+    expect(wrapper!.get('dialog[aria-label="重置流量"]').text()).toContain("不会影响转发连接或统计开关");
+    await button("取消").trigger("click");
+    expect(calls.some((call) => call.path.endsWith("/traffic/reset"))).toBe(false);
+    expect(wrapper!.get(".traffic-direction strong").attributes("title")).toBe("1234 B");
+    await button("重置流量").trigger("click");
+    await button("确认重置").trigger("click");
+    await flushPromises();
+    expect(wrapper!.find("dialog").exists()).toBe(false);
+    expect(wrapper!.get(".traffic-direction strong").attributes("title")).toBe("0 B");
+    const reset = calls.find((call) => call.path.endsWith("/traffic/reset"))!;
+    expect(reset.options.method).toBe("POST");
+    expect(new Headers(reset.options.headers).get("If-Match")).toBe('"1"');
+    expect(new Headers(reset.options.headers).get("X-CSRF-Token")).toBe("csrf-demo");
+    await wrapper!.get('.desktop-table [role="switch"]').trigger("click");
+    await flushPromises();
+    const update = calls.find((call) => call.options.method === "PUT")!;
+    expect(new Headers(update.options.headers).get("If-Match")).toBe('"2"');
+  });
+
+  it.each([500, 412])("重置失败 %s 保留累计值并提示", async (status) => {
+    records[0]!.traffic = { ...example.traffic, upload_bytes: "4321" };
+    await start();
+    failurePath = "/api/rules/rule-1/traffic/reset";
+    failureStatus = status;
+    await button("重置流量").trigger("click");
+    await button("确认重置").trigger("click");
+    await flushPromises();
+    expect(wrapper!.get(".traffic-direction strong").attributes("title")).toBe("4321 B");
+    expect(wrapper!.get('dialog[aria-label="重置流量"] [role="alert"]').text()).toContain(status === 412 ? "其他页面更新" : "监听端口已被占用");
+    expect(button("确认重置").attributes("disabled")).toBeUndefined();
+  });
+
+  it("等待重置期间禁止重复提交与其他变更", async () => {
+    await start();
+    const original = fetch;
+    let resolveReset!: (value: Response) => void;
+    let requests = 0;
+    vi.stubGlobal("fetch", vi.fn((path: string, options: RequestInit) => {
+      if (path.endsWith("/traffic/reset")) {
+        requests++;
+        return new Promise<Response>((resolve) => { resolveReset = resolve; });
+      }
+      return original(path, options);
+    }));
+    await button("重置流量").trigger("click");
+    await button("确认重置").trigger("click");
+    await button("正在重置").trigger("click");
+    expect(requests).toBe(1);
+    expect(wrapper!.get('.desktop-table [role="switch"]').attributes("disabled")).toBeDefined();
+    expect(button("取消").attributes("disabled")).toBeDefined();
+    resolveReset(response({ ...example, revision: 2 }));
+    await flushPromises();
+    expect(wrapper!.find("dialog").exists()).toBe(false);
+    expect(wrapper!.get('.desktop-table [role="switch"]').attributes("disabled")).toBeUndefined();
+  });
+
+  it("重置前发起的旧列表请求不会覆盖新统计和版本", async () => {
+    records[0]!.traffic = { ...example.traffic, upload_bytes: "9999" };
+    await start();
+    const oldResponse = response({ rules: structuredClone(records) });
+    const original = fetch;
+    let resolveList!: (value: Response) => void;
+    let pending = true;
+    vi.stubGlobal("fetch", vi.fn((path: string, options: RequestInit) => {
+      if (pending && path === "/api/rules" && !options.method) {
+        pending = false;
+        return new Promise<Response>((resolve) => { resolveList = resolve; });
+      }
+      return original(path, options);
+    }));
+    await button("刷新").trigger("click");
+    await button("重置流量").trigger("click");
+    await button("确认重置").trigger("click");
+    await flushPromises();
+    resolveList(oldResponse);
+    await flushPromises();
+    expect(wrapper!.get(".traffic-direction strong").attributes("title")).toBe("0 B");
+    await wrapper!.get('.desktop-table [role="switch"]').trigger("click");
+    await flushPromises();
+    const update = calls.find((call) => call.options.method === "PUT")!;
+    expect(new Headers(update.options.headers).get("If-Match")).toBe('"2"');
   });
 });

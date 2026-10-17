@@ -12,12 +12,12 @@
 - `model.Transports(protocol) []string`：`tcp`、`udp` 映射单个传输，`tcp+udp` 映射两个传输，未知值返回 nil；冲突使用传输集合交集。
 - `forward.Engine.Prepare(model.Rule) (*Runtime, error)`：只接收物理 TCP 或 UDP 配置，绑定端口但不转发；`Start()`、`Update(rule)`、`Stop()`、`Error()` 分离准备与生效。`Failed() <-chan struct{}` 只通知不可恢复监听故障，正常 Stop 和目标不可达不触发。
 - `rules.runtimeGroup`：每个逻辑规则关联一个运行组，以协议为键持有物理 Runtime；Service 串行控制组的准备、替换、监控和停止。
-- SQL 迁移放在 `internal/store/migrations/` 并内嵌，以 `PRAGMA user_version` 管理。保留 `001_init.sql`；`002_tcp_udp.sql` 将协议 CHECK 扩展为三个值，当前版本为 2。v1→v2 事务复制全部字段并保留自定义索引和触发器；未知列、外部外键依赖或迁移失败须拒绝并回滚，不能静默丢弃。
+- SQL 迁移放在 `internal/store/migrations/` 并内嵌，以 `PRAGMA user_version` 管理。保留 `001_init.sql`；`002_tcp_udp.sql` 将协议 CHECK 扩展为三个值；`003_traffic.sql` 增加默认关闭的统计开关和累计表，当前版本为 3。v1→v2 事务复制全部字段并保留自定义索引和触发器；未知列、外部外键依赖或迁移失败须拒绝并回滚，不能静默丢弃。v2→v3 增量 ALTER，不重建 rules 表。
 - `.github/workflows/ci.yml`：PR 与 `workflow_call` 验证入口；`release.yml`：main push 和 v* tag push 的验证及发布入口。同一次 main 推送只执行一套验证。
 
 ## 3. 请求、响应与环境契约
 
-规则输入只包含 `name/protocol/listen_host/listen_port/target_host/target_port/enabled`，不得让客户端设置 id、revision、时间或运行态。返回 Rule 包含这些配置及 `id/revision/created_at/updated_at/status/last_error_code?/last_error?`。
+规则输入只包含 `name/protocol/listen_host/listen_port/target_host/target_port/enabled/traffic_enabled?`，不得让客户端设置 id、revision、时间或统计快照。返回 Rule 包含这些配置及 `id/revision/created_at/updated_at/status/last_error_code?/last_error?/traffic`，统计契约见下方场景。
 
 `protocol` 只接受 `tcp`、`udp`、`tcp+udp`。组合规则使用一条记录、一个 id/revision、同一监听 IP/数字端口及同一目标主机/数字端口；启停、重试和删除整体执行。现有两条单协议规则不自动合并。组合内两个 Runtime 按同一非空 Rule.ID 共享单规则会话预算；预备实例也持有预算引用，最后实例停止且会话释放后才回收预算。
 
@@ -88,3 +88,56 @@
 正确：按原始 ref 区分 main 与版本标签，main 输出 latest 和提交版本；仅受信任 push 入口调用验证后发布，版本发行步骤以 refs/tags 条件隔离。
 
 所有自写注释、错误文案和内部文档使用中文；GitHub Actions 名称、工作流自有提示及其发布/冒烟脚本可见提示按用户要求使用英文，Go 工具维护的机械标记不翻译。测试临时目录使用 `internal/testutil.TempDir`，工具缓存和 TMPDIR/GOTMPDIR/GOPATH 均位于仓库 `.tmp/`。
+
+## 8. 场景：按规则流量统计与重置
+
+### 8.1 范围与触发条件
+
+修改流量计数、统计开关、后台采样、累计量存储、重置接口或退出行为时适用。统计属于逻辑规则，不属于单个监听器或 generation；组合规则两种传输共享一个累计对象。
+
+### 8.2 签名
+
+- `forward.NewTraffic(enabled, value, now)` 创建共享统计对象；`Add(upload, n)`、`SetEnabled(enabled, now)`、`Sample(now, active)`、`Snapshot()` 维护短锁状态。
+- `rules.Service.ResetTraffic(ctx, id, revision) (model.Rule, error)`：服务锁内协调重置和版本校验。
+- `Repository.SaveTraffic(ctx, map[string]model.Traffic) error`：批量提交累计量；`ResetTraffic(ctx, model.Rule) error`：同一事务清零并更新 revision。
+- `rules.Service.Close() error` 幂等，停止采样、等待转发退出后最终保存，返回保存错误；main 需报告，数据库必须后关闭。
+- `POST /api/rules/{id}/traffic/reset`：受 protect、Origin、CSRF、If-Match 保护，成功 200 返回最新 Rule 与 ETag。
+
+### 8.3 请求、响应与存储契约
+
+`traffic_enabled` 新增省略或 null 为 false，修改省略或 null 保留旧值；客户端不能提交 traffic。输出 `traffic` 固定含 `upload_bytes/download_bytes` 非负十进制字符串与 `upload_bytes_per_second/download_bytes_per_second` 有限非负数，速度单位 B/s。累计量使用 int64，达到上限饱和而非溢出。
+
+流量只计成功写出的应用载荷，上行为客户端到目标，下行为目标到客户端；部分写入按实际 n，丢包/失败部分不计数。TCP 持续连接每次成功写出即累计，不等 io.Copy 结束。数据路径不持有服务锁、不访问数据库；改变统计开关或重置不换代、不主动断开连接。
+
+后台每秒采样，每 5 秒批量保存变化的累计值；GET 不推进采样基线。统计关闭、规则停用或监听失败时输出速度为零，累计量保留。改名、目标、监听或协议修改沿用规则 ID 累计，删除时通过外键级联清理 rule_traffic。
+
+重置临时切分统计代，事务期间新流量进入新代；提交失败合并旧累计和期间增量，成功保留新代并重建采样基线。重置成功增加 revision 与 updated_at，周期保存不变更 revision；服务锁串行化批量保存、重置和删除，禁止旧快照覆盖清零或复活删除数据。
+
+保存成功后才推进持久化基线，失败保留待写数据并记录日志，后续重试。正常退出最终刷新；强制终止可能丢失最近未保存增量，持续存储故障扩大窗口，不能承诺断电零丢失。
+
+### 8.4 校验与错误矩阵
+
+| 条件 | 行为 |
+| --- | --- |
+| 统计字段非布尔或输入中含 traffic | 400，不修改规则。 |
+| 未登录、无效 CSRF/Origin | 401/403，不重置。 |
+| 不存在、过期版本 | 404/412，不清零。 |
+| 清零事务失败 | 500，累计量加期间新增流量完整保留，revision 与开关不变，连接继续。 |
+| 定时保存失败 | 保留内存增量，记录错误，后续重试。 |
+| 退出最终保存失败 | Close 返回错误并记录，主程序报告失败。 |
+
+### 8.5 正常、基础与异常案例
+
+- 正常：组合规则真实 TCP/UDP 上下行汇总；同一连接上开关暂停/继续，重置后只累计新流量。
+- 基础：旧库升级所有规则默认关闭，正常重启恢复累计值；停用或关闭统计后仍能清零已有累计量。
+- 异常：清零遇到存储故障保留累计量和并发新增，旧版本重试不能清除其他页面修改后的数据。
+
+### 8.6 必需测试
+
+转发层断言成功/部分写入计数、关闭期间不计数、可控时钟速度与空闲归零、重置失败合并以及高并发；服务层用真实 socket 断言长连接开关/重置不掉线、组合汇总、重置/批量保存/删除次序、最终保存与双 Close；存储验证 v1/v2/v3 升级、默认值、无损字段、累计恢复、清零事务失败回滚和级联删除；API 验证鉴权、字段、ETag、版本竞争和精确字节字符串。
+
+### 8.7 错误与正确写法
+
+错误：用 io.Copy 最终返回量统计长连接；在 GET 时计算并更新速度；重置内存后忽略持久化错误。
+
+正确：每次成功 Write 后累计，独立后台采样；重置事务失败恢复旧统计并合并并发增量，旧周期快照无法回写。

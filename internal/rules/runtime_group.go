@@ -67,7 +67,7 @@ func (s *Service) prepareGroup(r model.Rule, reusable *runtimeGroup) (*runtimeGr
 			g.members[transport] = reusable.members[transport]
 			continue
 		}
-		rt, err := s.engine.Prepare(physicalRule(r, transport))
+		rt, err := s.engine.PrepareTraffic(physicalRule(r, transport), s.traffic[r.ID])
 		if err != nil {
 			for _, pending := range added {
 				pending.Stop()

@@ -52,9 +52,18 @@ export interface RuleInput {
   target_host: string;
   target_port: number;
   enabled: boolean;
+  traffic_enabled: boolean;
+}
+
+export interface Traffic {
+  upload_bytes: string;
+  download_bytes: string;
+  upload_bytes_per_second: number;
+  download_bytes_per_second: number;
 }
 
 export interface Rule extends RuleInput {
+  traffic: Traffic;
   id: string;
   revision: number;
   created_at: string;
@@ -89,5 +98,6 @@ export function ruleInput(rule: Rule): RuleInput {
     target_host: rule.target_host,
     target_port: rule.target_port,
     enabled: rule.enabled,
+    traffic_enabled: rule.traffic_enabled,
   };
 }

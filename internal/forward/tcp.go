@@ -42,8 +42,8 @@ func (s *session) runTCP() {
 		return
 	}
 	finished := make(chan struct{}, 2)
-	copyDirection := func(dst, src net.Conn) {
-		_, err := io.Copy(dst, src)
+	copyDirection := func(dst, src net.Conn, upload bool) {
+		_, err := io.Copy(trafficWriter{writer: dst, traffic: s.runtime.traffic, upload: upload}, struct{ io.Reader }{src})
 		if err != nil {
 			s.close()
 		} else if tcp, ok := dst.(*net.TCPConn); ok {
@@ -51,8 +51,8 @@ func (s *session) runTCP() {
 		}
 		finished <- struct{}{}
 	}
-	go copyDirection(upstream, s.client)
-	go copyDirection(s.client, upstream)
+	go copyDirection(upstream, s.client, true)
+	go copyDirection(s.client, upstream, false)
 	<-finished
 	<-finished
 }

@@ -76,7 +76,9 @@ func (s *session) runUDP() {
 				return
 			}
 			_ = s.runtime.udp.SetWriteDeadline(time.Now().Add(time.Second))
-			_, err = s.runtime.udp.WriteToUDP(buffer[:n], s.peer)
+			written, writeErr := s.runtime.udp.WriteToUDP(buffer[:n], s.peer)
+			s.runtime.traffic.Add(false, written)
+			err = writeErr
 			s.runtime.udpWrite.Unlock()
 			if err != nil {
 				return
@@ -92,7 +94,9 @@ func (s *session) runUDP() {
 			return
 		case packet := <-s.packets:
 			_ = upstream.SetReadDeadline(time.Now().Add(idle))
-			if _, err := upstream.Write(packet); err != nil {
+			n, err := upstream.Write(packet)
+			s.runtime.traffic.Add(true, n)
+			if err != nil {
 				return
 			}
 		}

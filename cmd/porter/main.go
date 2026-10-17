@@ -28,11 +28,11 @@ var version = "dev"
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	if err := run(); err != nil {
-		slog.Error("Porter 启动失败", "error", err)
+		slog.Error("Porter 运行失败", "error", err)
 		os.Exit(1)
 	}
 }
-func run() error {
+func run() (result error) {
 	showVersion := flag.Bool("version", false, "显示版本号")
 	flag.Parse()
 	if *showVersion {
@@ -62,7 +62,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer service.Close()
+	defer func() {
+		result = errors.Join(result, service.Close())
+		slog.Info("Porter 已停止")
+	}()
 	handler := httpapi.New(service, auth.New(cfg.Username, cfg.Password), db, cfg.CookieSecure, web.Handler())
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
 	done := make(chan error, 1)
@@ -83,7 +86,5 @@ func run() error {
 	if err = server.Shutdown(shutdown); err != nil {
 		server.Close()
 	}
-	service.Close()
-	slog.Info("Porter 已停止")
 	return err
 }

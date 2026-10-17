@@ -109,6 +109,7 @@ func newGeneration(rule model.Rule) *generation {
 
 type Runtime struct {
 	engine       *Engine
+	traffic      *Traffic
 	budget       *ruleBudget
 	op           sync.Mutex
 	mu           sync.Mutex
@@ -127,6 +128,11 @@ type Runtime struct {
 
 // Prepare 只占用监听端口；提交持久化配置后调用 Start 才开始处理数据。
 func (e *Engine) Prepare(rule model.Rule) (*Runtime, error) {
+	return e.PrepareTraffic(rule, nil)
+}
+
+// PrepareTraffic 允许规则服务传入跨监听共享的统计实例。
+func (e *Engine) PrepareTraffic(rule model.Rule, traffic *Traffic) (*Runtime, error) {
 	ip := net.ParseIP(rule.ListenHost)
 	if ip == nil {
 		return nil, errors.New("监听地址必须是 IP 地址")
@@ -136,7 +142,7 @@ func (e *Engine) Prepare(rule model.Rule) (*Runtime, error) {
 		family = "4"
 	}
 	address := net.JoinHostPort(rule.ListenHost, strconv.Itoa(rule.ListenPort))
-	r := &Runtime{engine: e, current: newGeneration(rule), failedSignal: make(chan struct{})}
+	r := &Runtime{engine: e, traffic: traffic, current: newGeneration(rule), failedSignal: make(chan struct{})}
 	var err error
 	switch rule.Protocol {
 	case "tcp":
