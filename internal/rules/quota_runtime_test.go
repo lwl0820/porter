@@ -143,16 +143,31 @@ func (q *quotaFixture) rule(t *testing.T, u model.User, port, target int, protoc
 	}
 	return r
 }
-func targetPair(t *testing.T, request, response int) int {
+func (q *quotaFixture) targetPair(t *testing.T, request, response int) int {
 	t.Helper()
-	base := availableRange(t, 1)
-	tcp, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", base))
-	if err != nil {
-		t.Fatal(err)
+	var tcp net.Listener
+	var udp net.PacketConn
+	for tries := 0; tries < 200; tries++ {
+		listener, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := listener.Addr().(*net.TCPAddr).Port
+		// 分配但尚未监听的用户端口不能被测试目标占用。
+		if port >= q.base && port < q.base+16 {
+			listener.Close()
+			continue
+		}
+		socket, err := net.ListenPacket("udp4", listener.Addr().String())
+		if err != nil {
+			listener.Close()
+			continue
+		}
+		tcp, udp = listener, socket
+		break
 	}
-	udp, err := net.ListenPacket("udp4", tcp.Addr().String())
-	if err != nil {
-		t.Fatal(err)
+	if tcp == nil {
+		t.Fatal("找不到用户端口范围外的TCP/UDP目标端口")
 	}
 	acceptDone := make(chan struct{})
 	var wg sync.WaitGroup
@@ -210,7 +225,7 @@ func targetPair(t *testing.T, request, response int) int {
 		mu.Unlock()
 		wg.Wait()
 	})
-	return base
+	return tcp.Addr().(*net.TCPAddr).Port
 }
 func quotaTCP(t *testing.T, port int) net.Conn {
 	t.Helper()
@@ -264,14 +279,18 @@ func TestQuotaAccountingAggregatesAcrossRulesAndProtocols(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			q := newQuotaFixture(t)
 			u := q.user(t, "用户", mode, 100000)
-			a := targetPair(t, 100, 10)
-			b := targetPair(t, 10, 100)
+			a := q.targetPair(t, 100, 10)
+			b := q.targetPair(t, 10, 100)
 			first := q.rule(t, u, u.PortStart, a, "tcp+udp", true)
 			q.rule(t, u, u.PortStart+1, b, "tcp+udp", true)
 			c := quotaTCP(t, u.PortStart)
 			sendTCP(t, c, 100, 10)
 			sendUDP(t, u.PortStart+1, 10, 100)
-			eventuallyQuota(t, func() bool { return q.s.meters[u.ID].Snapshot().DownloadBytes == 110 })
+			// 收到响应不代表两个转发协程都已完成记账，须等待同一快照的双向累计。
+			eventuallyQuota(t, func() bool {
+				v := q.s.meters[u.ID].Snapshot()
+				return v.UploadBytes == 110 && v.DownloadBytes == 110
+			})
 			v := q.s.meters[u.ID].Snapshot()
 			if v.UploadBytes != 110 || v.DownloadBytes != 110 || v.UsedBytes != want {
 				t.Fatalf("全用户聚合错误：%+v", v)
@@ -303,7 +322,7 @@ func TestQuotaExhaustionActivelyStopsAllRulesAndPreservesOtherUser(t *testing.T)
 			q := newQuotaFixture(t)
 			u := q.user(t, "耗尽用户", mode, 2000)
 			other := q.user(t, "其他用户", mode, 100000)
-			target := targetPair(t, 1000, 1000)
+			target := q.targetPair(t, 1000, 1000)
 			first := q.rule(t, u, u.PortStart, target, "tcp+udp", true)
 			q.rule(t, u, u.PortStart+1, target, "tcp+udp", true)
 			q.rule(t, other, other.PortStart, target, "tcp+udp", true)
@@ -359,10 +378,15 @@ func TestQuotaExhaustionActivelyStopsAllRulesAndPreservesOtherUser(t *testing.T)
 func TestQuotaCycleRestoresOnlyPausedRulesAndDoesNotDropHealthyConnections(t *testing.T) {
 	q := newQuotaFixture(t)
 	u := q.user(t, "正常用户", model.AccountingBoth, 100000)
-	target := targetPair(t, 100, 100)
+	target := q.targetPair(t, 100, 100)
 	q.rule(t, u, u.PortStart, target, "tcp+udp", true)
 	c := quotaTCP(t, u.PortStart)
 	sendTCP(t, c, 100, 100)
+	// 推进测试时钟前先完成旧周期记账，避免把延迟的写入累计到新周期。
+	eventuallyQuota(t, func() bool {
+		v := q.s.meters[u.ID].Snapshot()
+		return v.UploadBytes == 100 && v.DownloadBytes == 100
+	})
 	paused := q.user(t, "耗尽用户", model.AccountingBoth, 200)
 	r := q.rule(t, paused, paused.PortStart, target, "tcp", true)
 	disabled := q.rule(t, paused, paused.PortStart+1, target, "tcp", false)
@@ -388,6 +412,10 @@ func TestQuotaCycleRestoresOnlyPausedRulesAndDoesNotDropHealthyConnections(t *te
 	if revived {
 		t.Fatal("周期转换复活手动停用或删除规则")
 	}
+	eventuallyQuota(t, func() bool {
+		v := q.s.meters[u.ID].Snapshot()
+		return v.UploadBytes == 100 && v.DownloadBytes == 100
+	})
 	v := q.s.meters[u.ID].Snapshot()
 	if v.UploadBytes != 100 || v.DownloadBytes != 100 || !v.CycleStart.Equal(q.now()) {
 		t.Fatalf("新周期用量错误：%+v", v)
@@ -397,7 +425,7 @@ func TestQuotaCycleFailureBlocksAdmissionAndRetainsInFlightNewCycleBytes(t *test
 	q := newQuotaFixture(t)
 	u := q.user(t, "周期用户", model.AccountingMax, 100000)
 	m := q.s.meters[u.ID]
-	target := targetPair(t, 100, 100)
+	target := q.targetPair(t, 100, 100)
 	q.rule(t, u, u.PortStart, target, "tcp", true)
 	c := quotaTCP(t, u.PortStart)
 	sendTCP(t, c, 100, 100)
@@ -416,6 +444,10 @@ func TestQuotaCycleFailureBlocksAdmissionAndRetainsInFlightNewCycleBytes(t *test
 	q.repo.failReset.Store(false)
 	q.s.signalQuota()
 	sendTCP(t, c, 100, 100)
+	eventuallyQuota(t, func() bool {
+		v := m.Snapshot()
+		return v.UploadBytes == 117 && v.DownloadBytes == 100
+	})
 	v := m.Snapshot()
 	if v.UploadBytes != 117 || v.DownloadBytes != 100 {
 		t.Fatalf("暂存的跨边界用量丢失：%+v", v)
@@ -424,7 +456,7 @@ func TestQuotaCycleFailureBlocksAdmissionAndRetainsInFlightNewCycleBytes(t *test
 func TestQuotaPortOwnershipAndConcurrentUserAllocation(t *testing.T) {
 	q := newQuotaFixture(t)
 	u := q.user(t, "范围用户", model.AccountingBoth, 100000)
-	target := targetPair(t, 1, 1)
+	target := q.targetPair(t, 1, 1)
 	enabled := false
 	in := model.Input{Name: "端口", Protocol: "udp", ListenHost: "127.0.0.2", ListenPort: u.PortStart, TargetHost: "127.0.0.1", TargetPort: target, Enabled: &enabled}
 	if _, err := q.s.SaveFor(context.Background(), q.admin, q.admin.ID, "", 0, in); err == nil {
@@ -508,7 +540,7 @@ func TestQuotaCommitAcrossTwoBoundariesKeepsCASProgress(t *testing.T) {
 func TestQuotaSaveFailureRetriesAndRestartNeverRefunds(t *testing.T) {
 	q := newQuotaFixture(t)
 	u := q.user(t, "账本用户", model.AccountingMax, 200)
-	target := targetPair(t, 100, 100)
+	target := q.targetPair(t, 100, 100)
 	r := q.rule(t, u, u.PortStart, target, "tcp+udp", true)
 	c := quotaTCP(t, u.PortStart)
 	sendTCP(t, c, 100, 100)
@@ -560,7 +592,7 @@ func TestQuotaSaveFailureRetriesAndRestartNeverRefunds(t *testing.T) {
 func TestQuotaFinalSaveErrorIsReportedAndCloseIsIdempotent(t *testing.T) {
 	q := newQuotaFixture(t)
 	u := q.user(t, "退出用户", model.AccountingBoth, 100000)
-	target := targetPair(t, 100, 100)
+	target := q.targetPair(t, 100, 100)
 	q.rule(t, u, u.PortStart, target, "tcp", true)
 	sendTCP(t, quotaTCP(t, u.PortStart), 100, 100)
 	eventuallyQuota(t, func() bool { return q.s.meters[u.ID].Snapshot().DownloadBytes == 100 })
@@ -609,7 +641,7 @@ func TestQuotaRestartIsolatesUserCycleFailureAndRecoversOnlyPendingRules(t *test
 	q := newQuotaFixture(t)
 	failed := q.user(t, "启动待重置", model.AccountingBoth, 100000)
 	healthy := q.user(t, "启动正常", model.AccountingBoth, 100000)
-	target := targetPair(t, 100, 100)
+	target := q.targetPair(t, 100, 100)
 	resume := q.rule(t, failed, failed.PortStart, target, "tcp+udp", true)
 	disabled := q.rule(t, failed, failed.PortStart+1, target, "tcp+udp", false)
 	manual := q.rule(t, failed, failed.PortStart+2, target, "tcp+udp", true)
