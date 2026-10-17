@@ -2,7 +2,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-Porter 是专用于单台 Linux 服务器的 TCP、UDP 端口转发 Web 面板，提供中英文界面、SQLite 持久化和单容器部署。
+Porter 是专用于单台 Linux 服务器的 TCP、UDP 端口转发 Web 面板，支持 SQLite 持久化和单容器部署。
 
 - TCP、UDP、TCP+UDP 组合规则的新增、查看、修改、删除、启停及错误重试。
 - 按协议和状态筛选，按名称和地址搜索。
@@ -201,6 +201,6 @@ VERSION=v1.0.0 bash scripts/build-release.sh
 
 最后一条命令仅在 `.tmp/release` 生成 Linux amd64、arm64 压缩包与 `SHA256SUMS`，不会发布。PR 只验证，不发布。每次推送 `main` 时执行验证，通过后自动发布 Linux amd64/arm64 多架构镜像 `ghcr.io/lwl0820/porter:latest`，无需版本标签；这些构建的版本信息可定位到源提交，不创建 GitHub Release。
 
-推送 `v1.0.0` 等版本标签时，验证通过后发布对应版本的多架构 GHCR 镜像、更新 `latest`，并创建 GitHub Release 压缩包。`v1.0.0-rc.1` 等预发布标签发布预发行版，不会覆盖 `latest`。由于 `latest` 可能来自尚未打标签的 `main` 构建，需要固定版本的部署请使用明确的正式版本标签。工作流名称、步骤和工作流自有提示使用英文。Actions 固定 commit SHA，发布使用仓库 `GITHUB_TOKEN`。
+推送 `v1.0.0` 等版本标签时，验证通过后发布对应版本的多架构 GHCR 镜像、更新 `latest`，并创建 GitHub Release 压缩包。`v1.0.0-rc.1` 等预发布标签发布预发行版，不会覆盖 `latest`。由于 `latest` 可能来自尚未打标签的 `main` 构建，需要固定版本的部署请使用明确的正式版本标签。Actions 固定 commit SHA，发布使用仓库 `GITHUB_TOKEN`。
 
 首次公开发布前，需要启用仓库所需的 Actions 权限、确认允许发布软件包、将 GHCR 软件包设为公开，并实际验证匿名拉取。写入工作流配置本身不会产生远端发行版。

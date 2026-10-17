@@ -33,7 +33,17 @@ const validPages = isAdmin ? ["rules", "plans", "users", "settings"] : ["rules",
 const initialPage = window.location.pathname.split("/")[2] || "rules";
 const page = ref(validPages.includes(initialPage) ? initialPage : "rules");
 const resourceBusy = ref(false);
-const resourcePages: { value: string; label: MessageKey }[] = [{ value: "plans", label: "套餐管理" }, { value: "users", label: "用户管理" }, { value: "settings", label: "系统配置" }];
+const navigationPages: { value: string; label: MessageKey }[] = [
+  { value: "rules", label: "转发规则" },
+  ...(isAdmin ? [
+    { value: "plans", label: "套餐管理" as const },
+    { value: "users", label: "用户管理" as const },
+    { value: "settings", label: "系统配置" as const },
+  ] : [{ value: "account", label: "账户概览" as const }]),
+];
+const navigationOpen = ref(false);
+const navigationToggle = ref<HTMLButtonElement>();
+const navigationId = `${props.role}-navigation`;
 const users = ref<Account[]>([]);
 const account = ref<Account>();
 const ownerId = ref("");
@@ -107,6 +117,16 @@ const refreshingText = computed(
 );
 const mutationBusy = computed(() => Boolean(busy.value) || editorBusy.value || resourceBusy.value);
 
+function closeNavigation(): void {
+  if (!navigationOpen.value) return;
+  navigationOpen.value = false;
+  void nextTick(() => navigationToggle.value?.focus());
+}
+function navigate(value: string): void {
+  if (mutationBusy.value) return;
+  page.value = value;
+  closeNavigation();
+}
 function notify(message: MessageKey): void {
   announcement.value = message;
   if (toastTimer) clearTimeout(toastTimer);
@@ -124,6 +144,7 @@ function expireSession(): void {
   stopListRequest();
   setSession();
   session.value = undefined;
+  navigationOpen.value = false;
   rules.value = [];
   users.value = []; account.value = undefined; ownerId.value = ""; page.value = "rules";
   password.value = ""; busy.value = ""; resourceBusy.value = false; announcement.value = ""; deleteError.value = ""; resetError.value = "";
@@ -488,14 +509,42 @@ onUnmounted(() => {
 
   <div v-else class="app-shell">
     <a class="skip-link" href="#main-content">{{ t("跳转到主内容") }}</a>
-    <header class="topbar">
+    <header class="topbar" @keydown.esc="closeNavigation">
       <div class="topbar-inner">
         <a class="brand" :href="isAdmin ? '/admin/' : '/user/'" :aria-label="t('Porter 首页')"
           ><span class="brand-mark"><Icon name="arrows" :size="24" /></span
           ><span>Porter<span class="brand-period">.</span></span></a
-        ><span class="header-divider" /><span class="topbar-section"
-          ><Icon name="network" :size="17" />{{ t("端口转发") }}</span
         >
+        <span class="header-divider" aria-hidden="true" />
+        <button
+          ref="navigationToggle"
+          type="button"
+          class="navigation-toggle"
+          :aria-label="t(navigationOpen ? '关闭导航' : '打开导航')"
+          :aria-expanded="navigationOpen"
+          :aria-controls="navigationId"
+          @click="navigationOpen = !navigationOpen"
+        >
+          <Icon :name="navigationOpen ? 'close' : 'menu'" :size="21" />
+        </button>
+        <nav
+          :id="navigationId"
+          class="topbar-navigation"
+          :class="{ open: navigationOpen }"
+          :aria-label="t(isAdmin ? '管理后台' : '用户后台')"
+        >
+          <button
+            v-for="item in navigationPages"
+            :key="item.value"
+            type="button"
+            class="navigation-link"
+            :aria-current="page === item.value ? 'page' : undefined"
+            :disabled="mutationBusy"
+            @click="navigate(item.value)"
+          >
+            {{ t(item.label) }}
+          </button>
+        </nav>
         <div class="account">
           <LanguageSwitcher />
           <span class="account-avatar"><Icon name="user" :size="17" /></span
@@ -513,13 +562,6 @@ onUnmounted(() => {
       </div>
     </header>
     <main id="main-content" class="dashboard" tabindex="-1">
-      <nav class="app-navigation" :aria-label="t(isAdmin ? '管理后台' : '用户后台')">
-        <button class="button" :class="page === 'rules' ? 'primary' : 'secondary'" :disabled="mutationBusy" @click="page = 'rules'">{{ t('转发规则') }}</button>
-        <template v-if="isAdmin">
-          <button v-for="item in resourcePages" :key="item.value" class="button" :class="page === item.value ? 'primary' : 'secondary'" :disabled="mutationBusy" @click="page = item.value">{{ t(item.label) }}</button>
-        </template>
-        <button v-else class="button" :class="page === 'account' ? 'primary' : 'secondary'" :disabled="mutationBusy" @click="page = 'account'">{{ t('账户概览') }}</button>
-      </nav>
       <AdminResources v-if="isAdmin && page !== 'rules'" :key="page" :page="page" :api="api" @changed="resourcesChanged" @busy="resourceBusy = $event" />
       <AccountOverview v-if="!isAdmin && account" :account="account" />
       <template v-if="page === 'rules'">

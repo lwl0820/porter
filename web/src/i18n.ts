@@ -67,6 +67,8 @@ const english = {
   "添加用户": "Add user",
   "保存配置": "Save settings",
 
+  "打开导航": "Open navigation",
+  "关闭导航": "Close navigation",
   "语言": "Language",
   "Porter · 端口转发": "Porter · Port forwarding",
   "Porter 端口转发管理面板": "Porter port forwarding dashboard",

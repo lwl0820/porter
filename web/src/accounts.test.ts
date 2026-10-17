@@ -58,6 +58,64 @@ async function startUser() { window.history.replaceState(null, "", "/user/"); wr
 async function startAdmin() { wrapper = mount(AdminApp, { attachTo: document.body }); await flushPromises(); }
 
 describe("独立端与套餐界面", () => {
+ it("管理员页头导航保留各页面入口、当前状态和切页收起行为", async () => {
+  await startAdmin();
+  const header = wrapper!.get("header");
+  const nav = header.get('nav[aria-label="管理后台"]');
+  expect(wrapper!.find("main nav").exists()).toBe(false);
+  expect(nav.findAll("button").map(item => item.text())).toEqual(["转发规则", "套餐管理", "用户管理", "系统配置"]);
+  expect(nav.get('[aria-current="page"]').text()).toBe("转发规则");
+  const toggle = header.get('[aria-controls="admin-navigation"]');
+  expect(toggle.attributes("aria-expanded")).toBe("false");
+  await toggle.trigger("click");
+  expect(toggle.attributes("aria-expanded")).toBe("true");
+  await nav.findAll("button")[1]!.trigger("click"); await flushPromises();
+  expect(wrapper!.get("h1").text()).toBe("套餐管理");
+  expect(window.location.pathname).toBe("/admin/plans");
+  expect(nav.get('[aria-current="page"]').text()).toBe("套餐管理");
+  expect(toggle.attributes("aria-expanded")).toBe("false");
+  expect(document.activeElement).toBe(toggle.element);
+  await toggle.trigger("click");
+  await nav.findAll("button")[1]!.trigger("keydown", { key: "Escape" });
+  expect(toggle.attributes("aria-expanded")).toBe("false");
+  expect(document.activeElement).toBe(toggle.element);
+  await toggle.trigger("click"); await toggle.trigger("click");
+  expect(toggle.attributes("aria-expanded")).toBe("false");
+ });
+ it("用户页头仅有本人页面且导航控件跟随语言切换", async () => {
+  await startUser();
+  const header = wrapper!.get("header");
+  const nav = header.get('nav[aria-label="用户后台"]');
+  expect(nav.findAll("button").map(item => item.text())).toEqual(["转发规则", "账户概览"]);
+  await header.get('.language-switcher select').setValue("en");
+  const toggle = header.get('[aria-label="Open navigation"]');
+  await toggle.trigger("click");
+  expect(toggle.attributes("aria-label")).toBe("Close navigation");
+  await nav.findAll("button")[1]!.trigger("click"); await flushPromises();
+  expect(window.location.pathname).toBe("/user/account");
+  expect(nav.get('[aria-current="page"]').text()).toBe("Account overview");
+  expect(toggle.attributes("aria-label")).toBe("Open navigation");
+  expect(calls.every(item => item.path.startsWith("/api/user/"))).toBe(true);
+ });
+ it("资源保存期间导航和退出保持禁用，完成后可继续切页", async () => {
+  await startAdmin(); await button("系统配置").trigger("click"); await flushPromises();
+  const original = fetch;
+  let resolve!: (value: Response) => void;
+  vi.stubGlobal("fetch", vi.fn((path: string, options: RequestInit = {}) => {
+   if (path.endsWith("/settings") && options.method === "PUT") return new Promise<Response>(done => { resolve = done; });
+   return original(path, options);
+  }));
+  await wrapper!.get("form").trigger("submit");
+  const nav = wrapper!.get("header nav");
+  expect(nav.findAll("button").every(item => item.attributes("disabled") !== undefined)).toBe(true);
+  expect(wrapper!.get('[aria-label="退出登录"]').attributes("disabled")).toBeDefined();
+  await nav.findAll("button")[0]!.trigger("click");
+  expect(window.location.pathname).toBe("/admin/settings");
+  resolve(response({ port_start: 10000, port_end: 20000, revision: 4 })); await flushPromises();
+  await nav.findAll("button")[0]!.trigger("click"); await flushPromises();
+  expect(window.location.pathname).toBe("/admin/rules");
+  expect(nav.get('[aria-current="page"]').text()).toBe("转发规则");
+ });
  it("周期重置待恢复显示独立错误文案并保留管理员重试", async () => {
   records[0] = { ...records[0]!, status: "error", last_error_code: "quota_reset_pending", last_error: "流量周期重置暂未完成，正在重试" };
   await startAdmin();

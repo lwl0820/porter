@@ -2,7 +2,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-Porter is a self-hosted web panel for TCP and UDP port forwarding on one Linux server. Manage forwarding rules from a Chinese/English interface, with SQLite persistence and a single-container deployment.
+Porter is a self-hosted web panel for TCP and UDP port forwarding on one Linux server. Manage forwarding rules with SQLite persistence and a single-container deployment.
 
 - Create, inspect, edit, delete, enable, disable, and retry TCP, UDP, or combined TCP+UDP rules.
 - Filter by protocol or state, and search names and addresses.
@@ -192,6 +192,6 @@ VERSION=v1.0.0 bash scripts/build-release.sh
 
 The final command only builds local Linux amd64/arm64 archives and `SHA256SUMS` under `.tmp/release`; it does not publish them. Pull requests validate the application without publishing. Each push to `main` runs validation and, if it succeeds, publishes `ghcr.io/lwl0820/porter:latest` for Linux amd64/arm64 without requiring a version tag. These builds identify their source commit and do not create a GitHub Release.
 
-Pushing a version tag such as `v1.0.0` runs validation before publishing the versioned multi-architecture GHCR image, updating `latest`, and creating GitHub Release archives. Tags such as `v1.0.0-rc.1` publish prereleases and do not replace `latest`. Since `latest` can follow an untagged `main` build, use an explicit release tag for deployments that should stay on a fixed version. Workflow names, steps, and workflow-owned messages use English. Actions are pinned to commit SHAs and publish using the repository's `GITHUB_TOKEN`.
+Pushing a version tag such as `v1.0.0` runs validation before publishing the versioned multi-architecture GHCR image, updating `latest`, and creating GitHub Release archives. Tags such as `v1.0.0-rc.1` publish prereleases and do not replace `latest`. Since `latest` can follow an untagged `main` build, use an explicit release tag for deployments that should stay on a fixed version. Actions are pinned to commit SHAs and publish using the repository's `GITHUB_TOKEN`.
 
 Before the first public release, enable the repository's required Actions permissions, verify package publishing is permitted, set the GHCR package visibility to public, and confirm an unauthenticated image pull works. The repository configuration does not itself publish a release.
