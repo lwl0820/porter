@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "定位实际后端规范及检查入口"}
+{"file": ".trellis/spec/backend/contracts.md", "reason": "管理员权限、规则服务、数据库锁、版本保护、Docker 与原生部署约束"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查命令行、本机协议、服务与持久化的合同一致性"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用规则模型、服务授权及生命周期，避免重复业务校验"}
+{"file": ".trellis/tasks/10-18-rule-management-cli/research/现有实现.md", "reason": "现有代码定位、原生部署及已确认的本机提权方案"}
+{"file": ".trellis/spec/backend/cli-contracts.md", "reason": "双模式CLI、语言引导、本机真实UID授权、Docker禁用与验收合同"}
