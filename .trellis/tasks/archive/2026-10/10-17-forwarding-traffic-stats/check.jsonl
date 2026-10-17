@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/contracts.md","reason":"检查真实 socket、迁移回滚、存储失败、竞态和退出顺序"}
+{"file":".trellis/spec/frontend/contracts.md","reason":"检查接口校验、revision、异步竞争、窄屏与无障碍"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"检查字节精度与统计输入输出契约贯通"}
+{"file":".trellis/tasks/10-17-forwarding-traffic-stats/research/traffic-statistics.md","reason":"重点复核重置后旧快照覆盖、失败丢增量、长连接即时统计和多读者采样"}

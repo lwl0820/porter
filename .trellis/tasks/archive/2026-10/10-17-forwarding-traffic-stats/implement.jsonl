@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/contracts.md","reason":"遵循规则事务、运行组生命周期、迁移、鉴权和后端验证契约"}
+{"file":".trellis/spec/frontend/contracts.md","reason":"遵循统一响应校验、轮询、表单、无障碍和前端验证契约"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"核对计数、持久化、接口与界面的数据边界"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"复用现有鉴权、版本校验和弹窗，集中维护统计模型与格式化"}
+{"file":".trellis/tasks/10-17-forwarding-traffic-stats/research/traffic-statistics.md","reason":"实现共享统计、长连接开关、重置隔离、持久化和退出边界"}
