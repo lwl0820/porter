@@ -43,6 +43,8 @@ func CommonTransport(a, b string) string {
 
 // Rule 同时定义持久化配置与管理接口契约；累计流量独立持久化，状态与速度只保留在内存。
 type Rule struct {
+	OwnerID        string    `json:"owner_id"`
+	Owner          *Owner    `json:"owner,omitempty"`
 	ID             string    `json:"id"`
 	Name           string    `json:"name"`
 	Protocol       string    `json:"protocol"`

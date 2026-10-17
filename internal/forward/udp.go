@@ -69,6 +69,11 @@ func (s *session) runUDP() {
 				return
 			}
 			_ = upstream.SetReadDeadline(time.Now().Add(idle))
+			if s.runtime.meter != nil {
+				if err := s.runtime.meter.Wait(s.generation.ctx); err != nil {
+					return
+				}
+			}
 			// 共享监听器串行设置写截止时间，单个不可写目标不能阻塞更新等待。
 			s.runtime.udpWrite.Lock()
 			if s.generation.ctx.Err() != nil {
@@ -78,6 +83,9 @@ func (s *session) runUDP() {
 			_ = s.runtime.udp.SetWriteDeadline(time.Now().Add(time.Second))
 			written, writeErr := s.runtime.udp.WriteToUDP(buffer[:n], s.peer)
 			s.runtime.traffic.Add(false, written)
+			if s.runtime.meter != nil {
+				s.runtime.meter.Add(false, written)
+			}
 			err = writeErr
 			s.runtime.udpWrite.Unlock()
 			if err != nil {
@@ -93,9 +101,17 @@ func (s *session) runUDP() {
 		case <-s.generation.ctx.Done():
 			return
 		case packet := <-s.packets:
+			if s.runtime.meter != nil {
+				if err := s.runtime.meter.Wait(s.generation.ctx); err != nil {
+					return
+				}
+			}
 			_ = upstream.SetReadDeadline(time.Now().Add(idle))
 			n, err := upstream.Write(packet)
 			s.runtime.traffic.Add(true, n)
+			if s.runtime.meter != nil {
+				s.runtime.meter.Add(true, n)
+			}
 			if err != nil {
 				return
 			}

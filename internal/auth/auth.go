@@ -1,15 +1,21 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"sync"
 	"time"
+
+	"github.com/lwl0820/porter/internal/model"
 )
 
 type Session struct {
+	UserID   string    `json:"user_id"`
+	Role     string    `json:"role"`
+	Portal   string    `json:"-"`
 	Username string    `json:"username"`
 	CSRF     string    `json:"csrf_token"`
 	Expires  time.Time `json:"-"`
@@ -18,7 +24,12 @@ type attempts struct {
 	count int
 	until time.Time
 }
+type UserRepository interface {
+	UserByUsername(context.Context, string) (model.User, error)
+}
+
 type Manager struct {
+	users                  UserRepository
 	mu                     sync.Mutex
 	username               string
 	userHash, passwordHash [32]byte
@@ -59,15 +70,49 @@ func (m *Manager) AllowLogin(ip string) bool {
 	return true
 }
 
+// SetUsers 在启动时注入只读账号存储；两端仍共用同一限流器。
+func (m *Manager) SetUsers(users UserRepository) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.users = users
+}
+
 func (m *Manager) Login(username, password string) (string, Session, bool) {
-	u, p := sha256.Sum256([]byte(username)), sha256.Sum256([]byte(password))
-	validUser := subtle.ConstantTimeCompare(u[:], m.userHash[:])
-	validPassword := subtle.ConstantTimeCompare(p[:], m.passwordHash[:])
-	if validUser&validPassword != 1 {
+	return m.LoginPortal(context.Background(), model.RoleAdmin, username, password)
+}
+
+func (m *Manager) LoginPortal(ctx context.Context, portal, username, password string) (string, Session, bool) {
+	userID, role, displayName := model.AdminID, model.RoleAdmin, m.username
+	switch portal {
+	case model.RoleAdmin:
+		u, p := sha256.Sum256([]byte(username)), sha256.Sum256([]byte(password))
+		validUser := subtle.ConstantTimeCompare(u[:], m.userHash[:])
+		validPassword := subtle.ConstantTimeCompare(p[:], m.passwordHash[:])
+		if validUser&validPassword != 1 {
+			return "", Session{}, false
+		}
+	case model.RoleUser:
+		m.mu.Lock()
+		users := m.users
+		m.mu.Unlock()
+		if users == nil {
+			return "", Session{}, false
+		}
+		user, err := users.UserByUsername(ctx, username)
+		if err != nil || user.Role != model.RoleUser {
+			// 无效账号同样执行标准派生，避免通过耗时枚举存在的普通用户。
+			VerifyPassword(password, "pbkdf2-sha256$600000$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+			return "", Session{}, false
+		}
+		if !VerifyPassword(password, user.PasswordHash) {
+			return "", Session{}, false
+		}
+		userID, role, displayName = user.ID, user.Role, user.Username
+	default:
 		return "", Session{}, false
 	}
 	token, csrf := random(), random()
-	s := Session{Username: m.username, CSRF: csrf, Expires: time.Now().Add(12 * time.Hour)}
+	s := Session{UserID: userID, Role: role, Portal: portal, Username: displayName, CSRF: csrf, Expires: time.Now().Add(12 * time.Hour)}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.prune()
@@ -96,6 +141,22 @@ func (m *Manager) Get(token string) (Session, bool) {
 	s, ok := m.sessions[sha256.Sum256([]byte(token))]
 	return s, ok
 }
+
+// GetPortal 同时核对会话所属端与角色，复制另一端 Cookie 也不能越权。
+func (m *Manager) GetPortal(token, portal string) (Session, bool) {
+	s, ok := m.Get(token)
+	return s, ok && (portal == model.RoleAdmin || portal == model.RoleUser) && s.Portal == portal && s.Role == portal
+}
+
+func (m *Manager) LogoutPortal(token, portal string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := sha256.Sum256([]byte(token))
+	if s, ok := m.sessions[key]; ok && s.Portal == portal && s.Role == portal {
+		delete(m.sessions, key)
+	}
+}
+
 func (m *Manager) Logout(token string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

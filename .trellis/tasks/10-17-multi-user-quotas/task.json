@@ -1,0 +1,35 @@
+{
+  "id": "multi-user-quotas",
+  "name": "multi-user-quotas",
+  "title": "多用户、套餐与端口及流量配额管理",
+  "description": "增加独立管理端和用户端、套餐与用户创建、全用户规则管理和筛选、端口分配及流量配额控制",
+  "status": "in_progress",
+  "dev_type": "fullstack",
+  "scope": "multi-user-quotas",
+  "package": null,
+  "priority": "P2",
+  "creator": "lwl0820",
+  "assignee": "lwl0820",
+  "createdAt": "2026-10-17",
+  "completedAt": null,
+  "branch": "codex/multi-user-quotas",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "用户已确认提交并要求合并main、删除开发分支后推送；质量门禁已全部通过，正在执行提交、任务归档和交付收尾。",
+  "meta": {
+    "quality_gate": {
+      "status": "passed",
+      "frontend_tests": 53,
+      "go_race": "passed",
+      "container_smoke": "passed",
+      "browser": "passed",
+      "commit_approval": "approved"
+    }
+  }
+}

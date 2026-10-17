@@ -74,13 +74,13 @@ func TestVersionOneMigrationPreservesRecordsAndObjects(t *testing.T) {
 	updatedTime, _ := time.Parse(time.RFC3339Nano, updated)
 	for i, row := range rows {
 		protocol := []string{"tcp", "udp"}[i]
-		expected := model.Rule{ID: "old-" + protocol, Name: "旧规则 " + protocol, Protocol: protocol, ListenHost: "0.0.0.0", ListenPort: 12345 + i, TargetHost: "example.com", TargetPort: 4567 + i, Enabled: i == 1, Revision: int64(7 + i), CreatedAt: createdTime, UpdatedAt: updatedTime}
+		expected := model.Rule{OwnerID: model.AdminID, ID: "old-" + protocol, Name: "旧规则 " + protocol, Protocol: protocol, ListenHost: "0.0.0.0", ListenPort: 12345 + i, TargetHost: "example.com", TargetPort: 4567 + i, Enabled: i == 1, Revision: int64(7 + i), CreatedAt: createdTime, UpdatedAt: updatedTime}
 		if !reflect.DeepEqual(row, expected) {
 			t.Fatalf("旧规则迁移后变化：实际 %#v，期望 %#v", row, expected)
 		}
 	}
 	inspection := fixtureDB(t, path)
-	assertVersion(t, inspection, 3)
+	assertVersion(t, inspection, 4)
 	var rawCreated, rawUpdated string
 	if err = inspection.QueryRow("SELECT created_at,updated_at FROM rules WHERE id='old-tcp'").Scan(&rawCreated, &rawUpdated); err != nil || rawCreated != created || rawUpdated != updated {
 		t.Fatalf("原始时间文本变化：%q %q %v", rawCreated, rawUpdated, err)
@@ -107,13 +107,13 @@ func TestFreshAndVersionTwoDatabaseSupportCombinedProtocol(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	rule := model.Rule{ID: "both", Name: "组合规则", Protocol: model.ProtocolBoth, ListenHost: "::1", ListenPort: 12345, TargetHost: "localhost", TargetPort: 54321, Enabled: true, Revision: 4, CreatedAt: now, UpdatedAt: now}
+	rule := model.Rule{OwnerID: model.AdminID, ID: "both", Name: "组合规则", Protocol: model.ProtocolBoth, ListenHost: "::1", ListenPort: 12345, TargetHost: "localhost", TargetPort: 54321, Enabled: true, Revision: 4, CreatedAt: now, UpdatedAt: now}
 	if err = db.Save(context.Background(), rule, true); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
 	inspection := fixtureDB(t, path)
-	assertVersion(t, inspection, 3)
+	assertVersion(t, inspection, 4)
 	execute(t, inspection, "CREATE TABLE version_two_marker(value TEXT); INSERT INTO version_two_marker VALUES('保留')")
 	inspection.Close()
 	db, err = store.Open(path)
@@ -131,7 +131,7 @@ func TestFreshAndVersionTwoDatabaseSupportCombinedProtocol(t *testing.T) {
 		t.Fatalf("版本 2 重开不应重建已有结构：%q %v", marker, err)
 	}
 	for _, statement := range []string{
-		"INSERT INTO rules SELECT 'duplicate',name,protocol,listen_host,listen_port,target_host,target_port,enabled,revision,created_at,updated_at,traffic_enabled FROM rules WHERE id='both'",
+		"INSERT INTO rules SELECT 'duplicate',name,protocol,listen_host,listen_port,target_host,target_port,enabled,revision,created_at,updated_at,traffic_enabled,owner_id FROM rules WHERE id='both'",
 		"UPDATE rules SET protocol='invalid' WHERE id='both'",
 		"UPDATE rules SET listen_port=0 WHERE id='both'",
 		"UPDATE rules SET target_port=65536 WHERE id='both'",
@@ -185,7 +185,7 @@ func TestUnsafeCustomSchemaAndFutureVersionsAreRejected(t *testing.T) {
 		{"新增列", "ALTER TABLE rules ADD COLUMN custom_value TEXT", "字段"},
 		{"生成列", "ALTER TABLE rules ADD COLUMN custom_value TEXT GENERATED ALWAYS AS (name) VIRTUAL", "字段"},
 		{"外部外键", "CREATE TABLE reference_rule(rule_id TEXT REFERENCES rules(id))", "外键"},
-		{"未来版本", "PRAGMA user_version=4", "版本"},
+		{"未来版本", "PRAGMA user_version=5", "版本"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(testutil.TempDir(t), "custom.db")
@@ -204,7 +204,7 @@ func TestUnsafeCustomSchemaAndFutureVersionsAreRejected(t *testing.T) {
 			inspection := fixtureDB(t, path)
 			expectedVersion := 1
 			if test.name == "未来版本" {
-				expectedVersion = 4
+				expectedVersion = 5
 			}
 			assertVersion(t, inspection, expectedVersion)
 		})

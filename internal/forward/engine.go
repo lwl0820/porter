@@ -110,6 +110,7 @@ func newGeneration(rule model.Rule) *generation {
 type Runtime struct {
 	engine       *Engine
 	traffic      *Traffic
+	meter        Meter
 	budget       *ruleBudget
 	op           sync.Mutex
 	mu           sync.Mutex
@@ -128,11 +129,21 @@ type Runtime struct {
 
 // Prepare 只占用监听端口；提交持久化配置后调用 Start 才开始处理数据。
 func (e *Engine) Prepare(rule model.Rule) (*Runtime, error) {
-	return e.PrepareTraffic(rule, nil)
+	return e.PrepareMeter(rule, nil, nil)
 }
 
 // PrepareTraffic 允许规则服务传入跨监听共享的统计实例。
 func (e *Engine) PrepareTraffic(rule model.Rule, traffic *Traffic) (*Runtime, error) {
+	return e.PrepareMeter(rule, traffic, nil)
+}
+
+// Meter 只在数据路径使用短锁，周期提交时允许等待而不终止正常连接。
+type Meter interface {
+	Wait(context.Context) error
+	Add(bool, int)
+}
+
+func (e *Engine) PrepareMeter(rule model.Rule, traffic *Traffic, meter Meter) (*Runtime, error) {
 	ip := net.ParseIP(rule.ListenHost)
 	if ip == nil {
 		return nil, errors.New("监听地址必须是 IP 地址")
@@ -142,7 +153,7 @@ func (e *Engine) PrepareTraffic(rule model.Rule, traffic *Traffic) (*Runtime, er
 		family = "4"
 	}
 	address := net.JoinHostPort(rule.ListenHost, strconv.Itoa(rule.ListenPort))
-	r := &Runtime{engine: e, traffic: traffic, current: newGeneration(rule), failedSignal: make(chan struct{})}
+	r := &Runtime{engine: e, traffic: traffic, meter: meter, current: newGeneration(rule), failedSignal: make(chan struct{})}
 	var err error
 	switch rule.Protocol {
 	case "tcp":

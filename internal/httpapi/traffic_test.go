@@ -12,11 +12,11 @@ import (
 
 func TestTrafficInputResetAuthenticationAndRevision(t *testing.T) {
 	f := newAPI(t, "", false)
-	expectCode(t, f.request(t, "POST", "/api/rules/missing/traffic/reset", "", nil, false), 401, "unauthorized")
+	expectCode(t, f.request(t, "POST", "/api/admin/rules/missing/traffic/reset", "", nil, false), 401, "unauthorized")
 	f.login(t)
 	disabled := false
 	input := model.Input{Name: "流量规则", Protocol: "tcp", ListenHost: "127.0.0.1", ListenPort: freeTCPPort(t), TargetHost: "example.com", TargetPort: 443, Enabled: &disabled}
-	created := f.request(t, "POST", "/api/rules", inputJSON(t, input), nil, true)
+	created := f.request(t, "POST", "/api/admin/rules", inputJSON(t, input), nil, true)
 	expectStatus(t, created, 201)
 	r := responseRule(t, created)
 	if r.TrafficEnabled || r.Traffic.UploadBytes != 0 {
@@ -29,7 +29,7 @@ func TestTrafficInputResetAuthenticationAndRevision(t *testing.T) {
 	if !strings.Contains(string(raw["traffic"]), `"upload_bytes":"0"`) {
 		t.Fatalf("累计量未输出字符串：%s", created.body)
 	}
-	path := "/api/rules/" + r.ID
+	path := "/api/admin/rules/" + r.ID
 	enabled := true
 	input.TrafficEnabled = &enabled
 	updated := f.request(t, "PUT", path, inputJSON(t, input), map[string]string{"If-Match": `"1"`}, true)
@@ -60,7 +60,7 @@ func TestTrafficInputResetAuthenticationAndRevision(t *testing.T) {
 		t.Fatalf("重置改变了配置或未更新版本：%s", reset.body)
 	}
 	expectCode(t, f.request(t, "POST", resetPath, "", headers, true), 412, "revision_mismatch")
-	expectCode(t, f.request(t, "POST", "/api/rules/missing/traffic/reset", "", headers, true), 404, "not_found")
+	expectCode(t, f.request(t, "POST", "/api/admin/rules/missing/traffic/reset", "", headers, true), 404, "not_found")
 }
 
 func TestTrafficResetAndConfigConcurrentRevision(t *testing.T) {
@@ -68,10 +68,10 @@ func TestTrafficResetAndConfigConcurrentRevision(t *testing.T) {
 	f.login(t)
 	disabled := false
 	input := model.Input{Name: "并发规则", Protocol: "tcp", ListenHost: "127.0.0.1", ListenPort: freeTCPPort(t), TargetHost: "example.com", TargetPort: 443, Enabled: &disabled}
-	created := f.request(t, "POST", "/api/rules", inputJSON(t, input), nil, true)
+	created := f.request(t, "POST", "/api/admin/rules", inputJSON(t, input), nil, true)
 	expectStatus(t, created, 201)
 	r := responseRule(t, created)
-	path := "/api/rules/" + r.ID
+	path := "/api/admin/rules/" + r.ID
 	var wg sync.WaitGroup
 	statuses := make(chan int, 2)
 	body := inputJSON(t, input)

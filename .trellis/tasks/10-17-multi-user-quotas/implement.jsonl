@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "加载后端有效规范与规范入口"}
+{"file": ".trellis/spec/backend/contracts.md", "reason": "遵守认证、SQLite迁移、规则事务与转发生命周期、统计及验证契约"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "加载前端规范和产品双语约束"}
+{"file": ".trellis/spec/frontend/contracts.md", "reason": "遵守API响应校验、并发请求、无障碍、统计精度及中英文契约"}
+{"file": ".trellis/tasks/10-17-multi-user-quotas/research/现有实现与跨层约束.md", "reason": "理解现有认证、分配、用户级计量与周期恢复的跨层风险"}
+{"file": ".trellis/tasks/10-17-multi-user-quotas/research/实施接口契约.md", "reason": "固定跨代理JSON响应形状、双端入口及认证字段，防止前后端漂移"}

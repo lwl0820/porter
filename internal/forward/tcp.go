@@ -43,7 +43,7 @@ func (s *session) runTCP() {
 	}
 	finished := make(chan struct{}, 2)
 	copyDirection := func(dst, src net.Conn, upload bool) {
-		_, err := io.Copy(trafficWriter{writer: dst, traffic: s.runtime.traffic, upload: upload}, struct{ io.Reader }{src})
+		_, err := io.Copy(trafficWriter{writer: dst, traffic: s.runtime.traffic, upload: upload, meter: s.runtime.meter, ctx: s.generation.ctx}, struct{ io.Reader }{src})
 		if err != nil {
 			s.close()
 		} else if tcp, ok := dst.(*net.TCPConn); ok {

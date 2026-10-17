@@ -8,6 +8,7 @@ services:
     environment:
       PORTER_ADMIN_USERNAME: admin
       PORTER_ADMIN_PASSWORD: ${PORTER_ADMIN_PASSWORD:?请先设置 PORTER_ADMIN_PASSWORD}
+      PORTER_TRAFFIC_FLUSH_INTERVAL: "5s"
     volumes:
       - porter-data:/data
 

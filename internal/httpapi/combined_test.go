@@ -140,7 +140,7 @@ func TestHTTPCombinedRuleOneRequestFullLifecycle(t *testing.T) {
 	target, listen := pairedHTTPTarget(t), httpCombinedPort(t)
 	enabled := true
 	in := model.Input{Name: "统一业务入口", Protocol: model.ProtocolBoth, ListenHost: "127.0.0.1", ListenPort: listen, TargetHost: "127.0.0.1", TargetPort: target, Enabled: &enabled}
-	created := f.request(t, "POST", "/api/rules", inputJSON(t, in), nil, true)
+	created := f.request(t, "POST", "/api/admin/rules", inputJSON(t, in), nil, true)
 	expectStatus(t, created, 201)
 	rule := responseRule(t, created)
 	if rule.Protocol != model.ProtocolBoth || rule.Revision != 1 || rule.Status != "running" {
@@ -154,7 +154,7 @@ func TestHTTPCombinedRuleOneRequestFullLifecycle(t *testing.T) {
 		t.Fatalf("一次请求没有持久化为单条组合：%+v %v", rows, err)
 	}
 	verifyHTTPCombinedForwarding(t, listen)
-	path := "/api/rules/" + rule.ID
+	path := "/api/admin/rules/" + rule.ID
 	kept := combinedHTTPClient(t, listen)
 	httpTCPExchange(t, kept, "重命名前")
 	in.Name = "修改后的统一入口"
@@ -231,10 +231,10 @@ func TestHTTPCombinedCreationRejectsOverlappingSingleProtocol(t *testing.T) {
 			f.login(t)
 			disabled := false
 			in := model.Input{Name: "原规则", Protocol: protocol, ListenHost: "0.0.0.0", ListenPort: httpCombinedPort(t), TargetHost: "127.0.0.1", TargetPort: 1, Enabled: &disabled}
-			expectStatus(t, f.request(t, "POST", "/api/rules", inputJSON(t, in), nil, true), 201)
+			expectStatus(t, f.request(t, "POST", "/api/admin/rules", inputJSON(t, in), nil, true), 201)
 			in.Protocol = model.ProtocolBoth
 			in.ListenHost = "127.0.0.1"
-			conflict := f.request(t, "POST", "/api/rules", inputJSON(t, in), nil, true)
+			conflict := f.request(t, "POST", "/api/admin/rules", inputJSON(t, in), nil, true)
 			expectCode(t, conflict, 409, "rule_conflict")
 			if !bytes.Contains(conflict.body, bytes.ToUpper([]byte(protocol))) {
 				t.Fatalf("API 冲突未指明传输协议：%s", conflict.body)

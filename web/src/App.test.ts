@@ -1,11 +1,14 @@
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App.vue";
-import { setSession } from "./api";
+import { adminApi } from "./api";
+const { setSession } = adminApi;
 import { languageStorageKey, setLanguage } from "./i18n";
 import type { Rule, RuleInput } from "./types";
 
 const example: Rule = {
+  owner_id: "admin-id",
+  owner: { id: "admin-id", username: "admin", role: "admin" },
   id: "rule-1",
   name: "应用入口",
   protocol: "tcp",
@@ -57,6 +60,7 @@ async function fillRule(name = "DNS 入口"): Promise<void> {
 }
 
 beforeEach(() => {
+  window.history.replaceState(null, "", "/admin/");
   localStorage.clear();
   setLanguage("zh-CN");
   localStorage.clear();
@@ -90,7 +94,7 @@ beforeEach(() => {
           },
           failureStatus,
         );
-      if (path === "/api/auth/login") {
+      if (path === "/api/admin/auth/login") {
         const credentials = JSON.parse(String(options.body)) as {
           username: string;
           password: string;
@@ -104,22 +108,23 @@ beforeEach(() => {
             401,
           );
         authenticated = true;
-        return response({ username: "admin", csrf_token: "csrf-demo" });
+        return response({ user_id: "admin-id", role: "admin", username: "admin", csrf_token: "csrf-demo" });
       }
       if (!authenticated)
         return response(
           { error: { code: "unauthorized", message: "请先登录" } },
           401,
         );
-      if (path === "/api/auth/session")
-        return response({ username: "admin", csrf_token: "csrf-demo" });
-      if (path === "/api/auth/logout") {
+      if (path === "/api/admin/auth/session")
+        return response({ user_id: "admin-id", role: "admin", username: "admin", csrf_token: "csrf-demo" });
+      if (path === "/api/admin/auth/logout") {
         authenticated = false;
         return response(null, 204);
       }
-      if (path === "/api/rules" && !options.method)
+      if (path === "/api/admin/users") return response({ users: [] });
+      if (path === "/api/admin/rules" && !options.method)
         return response({ rules: records });
-      if (path === "/api/rules" && options.method === "POST") {
+      if (path === "/api/admin/rules" && options.method === "POST") {
         const input = JSON.parse(String(options.body)) as RuleInput;
         const created: Rule = {
           ...example,
@@ -256,9 +261,10 @@ describe("转发规则管理", () => {
     expect(wrapper!.find("dialog").exists()).toBe(false);
     expect(wrapper!.get(".desktop-table").text()).toContain("DNS 入口");
     const created = calls.find(
-      (call) => call.path === "/api/rules" && call.options.method === "POST",
+      (call) => call.path === "/api/admin/rules" && call.options.method === "POST",
     )!;
     expect(JSON.parse(String(created.options.body))).toEqual({
+      owner_id: "admin-id",
       name: "DNS 入口",
       protocol: "udp",
       listen_host: "0.0.0.0",
@@ -281,7 +287,7 @@ describe("转发规则管理", () => {
       .trigger("click");
     await flushPromises();
     await wrapper!.get("#rule-name").setValue("新的名称");
-    failurePath = "/api/rules/rule-1";
+    failurePath = "/api/admin/rules/rule-1";
     failureStatus = 409;
     failureFields = { listen_port: "监听端口已占用" };
     await wrapper!.get(".editor").trigger("submit");
@@ -360,7 +366,7 @@ describe("转发规则管理", () => {
   it("刷新失败保留已有列表，可重试恢复；隐藏页面暂停轮询", async () => {
     vi.useFakeTimers();
     await start();
-    failurePath = "/api/rules";
+    failurePath = "/api/admin/rules";
     failureStatus = 500;
     await button("刷新").trigger("click");
     await flushPromises();
@@ -378,7 +384,7 @@ describe("转发规则管理", () => {
     expect(calls).toHaveLength(before);
     state.mockReturnValue("visible");
     await vi.advanceTimersByTimeAsync(5000);
-    expect(calls).toHaveLength(before + 1);
+    expect(calls).toHaveLength(before + 2);
   });
 });
 
@@ -397,10 +403,11 @@ describe("TCP+UDP 组合规则", () => {
     await wrapper!.get(".editor").trigger("submit");
     await flushPromises();
     const creations = calls.filter(
-      (call) => call.path === "/api/rules" && call.options.method === "POST",
+      (call) => call.path === "/api/admin/rules" && call.options.method === "POST",
     );
     expect(creations).toHaveLength(1);
     expect(JSON.parse(String(creations[0]!.options.body))).toEqual({
+      owner_id: "admin-id",
       name: "双协议入口",
       protocol: "tcp+udp",
       listen_host: "0.0.0.0",
@@ -447,7 +454,7 @@ describe("TCP+UDP 组合规则", () => {
     }
     const edits = calls.filter((call) => call.options.method === "PUT");
     expect(edits).toHaveLength(4);
-    expect(edits.every((call) => call.path === "/api/rules/new-rule")).toBe(
+    expect(edits.every((call) => call.path === "/api/admin/rules/new-rule")).toBe(
       true,
     );
     expect(new Headers(edits[3]!.options.headers).get("If-Match")).toBe('"4"');
@@ -554,7 +561,7 @@ describe("TCP+UDP 组合规则", () => {
       .trigger("click");
     await flushPromises();
     await wrapper!.get("#rule-name").setValue("双协议新名称");
-    failurePath = "/api/rules/rule-1";
+    failurePath = "/api/admin/rules/rule-1";
     failureStatus = 409;
     failureFields = { listen_port: "UDP 监听端口已被占用" };
     await wrapper!.get(".editor").trigger("submit");
@@ -634,7 +641,7 @@ describe("流量统计", () => {
   it.each([500, 412])("重置失败 %s 保留累计值并提示", async (status) => {
     records[0]!.traffic = { ...example.traffic, upload_bytes: "4321" };
     await start();
-    failurePath = "/api/rules/rule-1/traffic/reset";
+    failurePath = "/api/admin/rules/rule-1/traffic/reset";
     failureStatus = status;
     await button("重置流量").trigger("click");
     await button("确认重置").trigger("click");
@@ -676,7 +683,7 @@ describe("流量统计", () => {
     let resolveList!: (value: Response) => void;
     let pending = true;
     vi.stubGlobal("fetch", vi.fn((path: string, options: RequestInit) => {
-      if (pending && path === "/api/rules" && !options.method) {
+      if (pending && path === "/api/admin/rules" && !options.method) {
         pending = false;
         return new Promise<Response>((resolve) => { resolveList = resolve; });
       }
@@ -809,7 +816,7 @@ describe("中英文界面", () => {
     await start();
     await button("新增规则").trigger("click");
     await fillRule();
-    failurePath = "/api/rules";
+    failurePath = "/api/admin/rules";
     failureStatus = 400;
     failureCode = "validation_error";
     failureMessage = "请检查表单内容";

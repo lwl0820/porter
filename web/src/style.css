@@ -832,31 +832,8 @@ th {
   padding: 0 12px;
   white-space: nowrap;
 }
-th:first-child {
-  padding-left: 24px;
-  width: 21%;
-}
-th:nth-child(2) {
-  width: 11%;
-}
-th:nth-child(3) {
-  width: 18%;
-}
-th:nth-child(4) {
-  width: 3%;
-  padding: 0;
-}
-th:nth-child(5) {
-  width: 18%;
-}
-th:nth-child(6) {
-  width: 13%;
-}
-th:last-child {
-  width: 16%;
-  padding-right: 22px;
-  text-align: right;
-}
+.rules-table .name-heading { padding-left: 24px; }
+.rules-table .operation-heading { padding-right: 22px; text-align: right; }
 td {
   height: 76px;
   padding: 13px 12px;
@@ -1517,21 +1494,6 @@ td:last-child {
   .app-footer {
     width: calc(100% - 56px);
   }
-  th:first-child {
-    width: 19%;
-  }
-  th:nth-child(3) {
-    width: 18%;
-  }
-  th:nth-child(5) {
-    width: 17%;
-  }
-  th:nth-child(6) {
-    width: 13%;
-  }
-  th:last-child {
-    width: 19%;
-  }
   .rule-avatar {
     margin-right: 8px;
     width: 28px;
@@ -2039,13 +2001,20 @@ td:last-child {
 .traffic-heading .text-button { font-size: 10px; padding: 0; white-space: nowrap; }
 .traffic-direction { margin-top: 5px; white-space: nowrap; }
 .traffic-direction strong { color: #46536b; font-weight: 500; }
-.desktop-table table { min-width: 1120px; }
-.desktop-table th:first-child { width: 16%; }
-.desktop-table th:nth-child(2) { width: 9%; }
-.desktop-table th:nth-child(3), .desktop-table th:nth-child(5) { width: 16%; }
-.desktop-table th:nth-child(6) { width: 11%; }
-.desktop-table th:nth-child(7) { width: 22%; }
-.desktop-table th:last-child { width: 15%; }
+/* 显式列定义与可滚动表格共同保证地址、状态、统计和操作各占独立空间。 */
+.rules-table.admin-rules-table { min-width: 1310px; }
+.rules-table.user-rules-table { min-width: 1198px; }
+.rules-table .column-name { width: 174px; }
+.rules-table .column-owner { width: 112px; }
+.rules-table .column-protocol { width: 96px; }
+.rules-table .column-listen, .rules-table .column-target { width: 180px; }
+.rules-table .column-direction { width: 24px; }
+.rules-table .column-status { width: 130px; }
+.rules-table .column-traffic { width: 240px; }
+.rules-table .column-operations { width: 174px; }
+.rules-table .owner-cell span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rules-table .status-cell { overflow: hidden; }
+.rules-table .rule-error { max-width: 100%; }
 .rule-card > .rule-traffic { padding: 16px 0; border-top: 1px solid #edf0f5; }
 
 /* 语言入口在窄屏和原生模态框内保持可操作。 */
@@ -2136,4 +2105,41 @@ html[lang="en"] .summary-body small {
   html[lang="en"] .summary-body > span {
     white-space: normal;
   }
+}
+
+.app-navigation { display: flex; gap: 10px; margin-bottom: 24px; flex-wrap: wrap; }
+.account-overview, .plan-card, .resource-form { border: 1px solid var(--border, #e2e7ee); background: white; border-radius: 14px; margin-bottom: 24px; overflow: hidden; }
+.account-details { padding: 20px; }
+.resource-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin: 0 0 20px; }
+.resource-grid dt { color: var(--muted, #667085); font-size: 12px; margin-bottom: 7px; }
+.resource-grid dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.resource-form { padding: 24px; max-width: 660px; }
+.resource-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.resource-form .field { margin-bottom: 18px; }
+.resource-form select, .editor select { width: 100%; min-height: 44px; border: 1px solid #dce2eb; border-radius: 8px; padding: 8px 12px; background: white; color: inherit; }
+.resource-form .button { margin-top: 16px; }
+.plan-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; }
+.plan-card { padding: 22px; }
+.plan-card h2 { margin-top: 0; }
+.owner-cell, .owner-label { font-size: 12px; color: #58657a; overflow-wrap: anywhere; }
+.status-badge.quota_exceeded { color: #a64a12; background: #fff1df; }
+.filters { flex-wrap: wrap; }
+@media (max-width: 760px) {
+ .resource-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+ .account-overview .panel-heading { align-items: flex-start; gap: 12px; flex-direction: column; }
+ .resource-form { padding: 18px; }
+ .filters select { min-width: 0; max-width: 100%; }
+ .app-navigation .button { flex: 1 1 auto; }
+}
+
+/* 用户、协议、状态与刷新采用一组紧凑筛选，搜索框可换成独立一行。 */
+.toolbar { flex-wrap: wrap; align-items: center; }
+.toolbar .search-box { flex: 1 1 240px; min-width: 180px; max-width: none; }
+.toolbar .filters { display: flex; flex: 0 1 auto; flex-direction: row; align-items: center; gap: 8px; }
+.toolbar .filters select { width: auto; flex: 0 1 auto; min-width: 100px; max-width: 180px; }
+@media (max-width: 760px) {
+ .toolbar .search-box { flex-basis: 100%; width: 100%; }
+ .toolbar .filters { width: 100%; flex: 1 1 100%; }
+ .toolbar .filters select { flex: 1 1 105px; max-width: none; }
+ .toolbar .filters .button { flex: 0 0 auto; }
 }

@@ -1,6 +1,7 @@
 package forward
 
 import (
+	"context"
 	"errors"
 	"math"
 	"sync"
@@ -90,5 +91,36 @@ func TestTrafficConcurrentCountingAndSaturation(t *testing.T) {
 	tr.Add(true, 20)
 	if tr.Snapshot().UploadBytes != math.MaxInt64 {
 		t.Fatal("累计量溢出为负数")
+	}
+}
+
+type recordingMeter struct {
+	err                  error
+	up, down, admissions int
+}
+
+func (m *recordingMeter) Wait(context.Context) error { m.admissions++; return m.err }
+func (m *recordingMeter) Add(upload bool, n int) {
+	if upload {
+		m.up += n
+	} else {
+		m.down += n
+	}
+}
+func TestQuotaWriterCountsPartialSuccessAndRejectsBeforeWriting(t *testing.T) {
+	meter := &recordingMeter{}
+	w := trafficWriter{writer: partialWriter{}, meter: meter, ctx: context.Background(), upload: true}
+	if n, err := w.Write([]byte("123456")); n != 3 || err == nil {
+		t.Fatal("未保留部分写入结果")
+	}
+	if meter.up != 3 || meter.down != 0 || meter.admissions != 1 {
+		t.Fatalf("套餐计量未按成功写出计算：%+v", meter)
+	}
+	meter.err = errors.New("额度耗尽")
+	if n, err := w.Write([]byte("123456")); n != 0 || !errors.Is(err, meter.err) {
+		t.Fatal("耗尽后仍然调用底层写入")
+	}
+	if meter.up != 3 {
+		t.Fatal("耗尽拒绝仍累计未成功写出的字节")
 	}
 }

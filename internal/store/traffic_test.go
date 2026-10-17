@@ -76,7 +76,7 @@ func TestVersionTwoTrafficMigrationAndPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	inspect := fixtureDB(t, path)
-	assertVersion(t, inspect, 3)
+	assertVersion(t, inspect, 4)
 	var count int
 	if err = inspect.QueryRow("SELECT count(*) FROM rule_traffic").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("删除未清理统计：%d %v", count, err)

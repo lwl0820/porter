@@ -42,6 +42,9 @@ func newAPI(t *testing.T, path string, secure bool) *apiFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.EnsureAdmin(context.Background(), "管理员"); err != nil {
+		t.Fatal(err)
+	}
 	ts := httptest.NewUnstartedServer(http.NotFoundHandler())
 	svc, err := rules.New(context.Background(), db, forward.New(forward.Limits{}), ts.Listener.Addr().String())
 	if err != nil {
@@ -50,6 +53,7 @@ func newAPI(t *testing.T, path string, secure bool) *apiFixture {
 		t.Fatal(err)
 	}
 	manager := auth.New("管理员", "测试密码")
+	manager.SetUsers(db)
 	ts.Config.Handler = New(svc, manager, db, secure, http.NotFoundHandler())
 	if secure {
 		ts.StartTLS()
@@ -124,7 +128,7 @@ func expectCode(t *testing.T, response apiResponse, status int, code string) {
 
 func (f *apiFixture) login(t *testing.T) apiResponse {
 	t.Helper()
-	response := f.request(t, "POST", "/api/auth/login", `{"username":"管理员","password":"测试密码"}`, nil, false)
+	response := f.request(t, "POST", "/api/admin/auth/login", `{"username":"管理员","password":"测试密码"}`, nil, false)
 	expectStatus(t, response, 200)
 	var session auth.Session
 	if err := json.Unmarshal(response.body, &session); err != nil {
@@ -149,11 +153,11 @@ func TestAuthenticationCookiesAndLogoutRevocation(t *testing.T) {
 	for _, secure := range []bool{false, true} {
 		t.Run(strconv.FormatBool(secure), func(t *testing.T) {
 			f := newAPI(t, "", secure)
-			expectCode(t, f.request(t, "GET", "/api/rules", "", nil, false), 401, "unauthorized")
-			expectCode(t, f.request(t, "POST", "/api/auth/login", `{"username":"管理员","password":"错误"}`, nil, false), 401, "credentials_invalid")
+			expectCode(t, f.request(t, "GET", "/api/admin/rules", "", nil, false), 401, "unauthorized")
+			expectCode(t, f.request(t, "POST", "/api/admin/auth/login", `{"username":"管理员","password":"错误"}`, nil, false), 401, "credentials_invalid")
 			response := f.login(t)
 			cookie := f.cookie
-			if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Secure != secure || cookie.Path != "/" || cookie.MaxAge != 43200 {
+			if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Secure != secure || cookie.Path != "/api/admin" || cookie.MaxAge != 43200 {
 				t.Fatalf("会话 Cookie 属性不正确：%+v", cookie)
 			}
 			if len(cookie.Value) != 64 || time.Until(cookie.Expires) < 11*time.Hour || time.Until(cookie.Expires) > 12*time.Hour {
@@ -165,14 +169,14 @@ func TestAuthenticationCookiesAndLogoutRevocation(t *testing.T) {
 			if response.header.Get("Cache-Control") != "no-store" || response.header.Get("X-Content-Type-Options") != "nosniff" {
 				t.Fatal("管理响应缺少安全响应头")
 			}
-			expectStatus(t, f.request(t, "GET", "/api/auth/session", "", nil, true), 200)
-			logout := f.request(t, "POST", "/api/auth/logout", "", nil, true)
+			expectStatus(t, f.request(t, "GET", "/api/admin/auth/session", "", nil, true), 200)
+			logout := f.request(t, "POST", "/api/admin/auth/logout", "", nil, true)
 			expectStatus(t, logout, 204)
 			if len(logout.cookies) != 1 || logout.cookies[0].MaxAge != -1 || !logout.cookies[0].HttpOnly {
 				t.Fatal("注销没有清除 Cookie")
 			}
-			expectCode(t, f.request(t, "GET", "/api/auth/session", "", nil, true), 401, "unauthorized")
-			expectCode(t, f.request(t, "POST", "/api/rules", `{}`, nil, true), 401, "unauthorized")
+			expectCode(t, f.request(t, "GET", "/api/admin/auth/session", "", nil, true), 401, "unauthorized")
+			expectCode(t, f.request(t, "POST", "/api/admin/rules", `{}`, nil, true), 401, "unauthorized")
 		})
 	}
 }
@@ -181,7 +185,7 @@ func TestReloginRotatesAndRevokesPresentedSession(t *testing.T) {
 	f := newAPI(t, "", false)
 	f.login(t)
 	oldCookie, oldCSRF := f.cookie, f.csrf
-	response := f.request(t, "POST", "/api/auth/login", `{"username":"管理员","password":"测试密码"}`, nil, true)
+	response := f.request(t, "POST", "/api/admin/auth/login", `{"username":"管理员","password":"测试密码"}`, nil, true)
 	expectStatus(t, response, 200)
 	if len(response.cookies) != 1 || response.cookies[0].Value == oldCookie.Value {
 		t.Fatal("重新登录没有轮换 token")
@@ -196,16 +200,16 @@ func TestReloginRotatesAndRevokesPresentedSession(t *testing.T) {
 	if f.csrf == oldCSRF {
 		t.Fatal("重新登录没有轮换 CSRF token")
 	}
-	expectStatus(t, f.request(t, "GET", "/api/rules", "", nil, true), 200)
+	expectStatus(t, f.request(t, "GET", "/api/admin/rules", "", nil, true), 200)
 }
 
 func TestLoginRateLimitCannotBeBypassedWithForwardedHeaders(t *testing.T) {
 	f := newAPI(t, "", false)
 	for i := range 10 {
-		response := f.request(t, "POST", "/api/auth/login", `{"username":"管理员","password":"错误"}`, map[string]string{"X-Forwarded-For": "192.0.2." + strconv.Itoa(i+1), "X-Real-IP": "198.51.100." + strconv.Itoa(i+1)}, false)
+		response := f.request(t, "POST", "/api/admin/auth/login", `{"username":"管理员","password":"错误"}`, map[string]string{"X-Forwarded-For": "192.0.2." + strconv.Itoa(i+1), "X-Real-IP": "198.51.100." + strconv.Itoa(i+1)}, false)
 		expectCode(t, response, 401, "credentials_invalid")
 	}
-	limited := f.request(t, "POST", "/api/auth/login", `{"username":"管理员","password":"测试密码"}`, nil, false)
+	limited := f.request(t, "POST", "/api/admin/auth/login", `{"username":"管理员","password":"测试密码"}`, nil, false)
 	expectCode(t, limited, 429, "login_limited")
 	if limited.header.Get("Retry-After") != "60" {
 		t.Fatal("限流响应缺少 Retry-After")
@@ -219,18 +223,18 @@ func TestOriginAndCSRFRejectBeforeMutation(t *testing.T) {
 	f := newAPI(t, "", false)
 	for _, origin := range []string{"", "null", "https://example.invalid", "http://attacker.invalid", "http://user@" + strings.TrimPrefix(f.server.URL, "http://"), f.server.URL + "/page", f.server.URL + "?query=1"} {
 		t.Run("登录来源"+origin, func(t *testing.T) {
-			expectCode(t, f.request(t, "POST", "/api/auth/login", `{"username":"管理员","password":"测试密码"}`, map[string]string{"Origin": origin}, false), 403, "origin_invalid")
+			expectCode(t, f.request(t, "POST", "/api/admin/auth/login", `{"username":"管理员","password":"测试密码"}`, map[string]string{"Origin": origin}, false), 403, "origin_invalid")
 		})
 	}
 	f.login(t)
 	for _, headers := range []map[string]string{{"X-CSRF-Token": ""}, {"X-CSRF-Token": "错误"}, {"Origin": ""}, {"Origin": "https://attacker.invalid"}, {"Origin": "https://" + strings.TrimPrefix(f.server.URL, "http://")}} {
-		expectCode(t, f.request(t, "POST", "/api/rules", `{}`, headers, true), 403, "csrf_invalid")
-		expectCode(t, f.request(t, "POST", "/api/auth/logout", "", headers, true), 403, "csrf_invalid")
+		expectCode(t, f.request(t, "POST", "/api/admin/rules", `{}`, headers, true), 403, "csrf_invalid")
+		expectCode(t, f.request(t, "POST", "/api/admin/auth/logout", "", headers, true), 403, "csrf_invalid")
 	}
 	if len(f.service.List()) != 0 {
 		t.Fatal("CSRF 拒绝请求写入了规则")
 	}
-	expectStatus(t, f.request(t, "GET", "/api/auth/session", "", nil, true), 200)
+	expectStatus(t, f.request(t, "GET", "/api/admin/auth/session", "", nil, true), 200)
 }
 
 func TestStrictJSONAndValidationResponses(t *testing.T) {
@@ -244,13 +248,13 @@ func TestStrictJSONAndValidationResponses(t *testing.T) {
 		{`{"username":"管理员","password":"测试密码"}`, "text/plain", "json_required"},
 		{`{"username":"` + strings.Repeat("a", 65536) + `"}`, "application/json", "invalid_json"},
 	} {
-		expectCode(t, f.request(t, "POST", "/api/auth/login", input.body, map[string]string{"Content-Type": input.contentType}, false), 400, input.code)
+		expectCode(t, f.request(t, "POST", "/api/admin/auth/login", input.body, map[string]string{"Content-Type": input.contentType}, false), 400, input.code)
 	}
 	f.login(t)
 	for _, body := range []string{`{"id":"自定义ID"}`, `{"enabled":"true"}`, `{"listen_port":1.5}`, `{} {}`, `[]`} {
-		expectCode(t, f.request(t, "POST", "/api/rules", body, nil, true), 400, "invalid_json")
+		expectCode(t, f.request(t, "POST", "/api/admin/rules", body, nil, true), 400, "invalid_json")
 	}
-	response := f.request(t, "POST", "/api/rules", `{"name":"规则","protocol":"tcp","listen_host":"127.0.0.1","listen_port":0,"target_host":"127.0.0.1","target_port":1}`, nil, true)
+	response := f.request(t, "POST", "/api/admin/rules", `{"name":"规则","protocol":"tcp","listen_host":"127.0.0.1","listen_port":0,"target_host":"127.0.0.1","target_port":1}`, nil, true)
 	expectCode(t, response, 400, "validation_error")
 	var body struct {
 		Error struct {
@@ -294,7 +298,7 @@ func responseRule(t *testing.T, response apiResponse) model.Rule {
 }
 func ruleList(t *testing.T, f *apiFixture) []model.Rule {
 	t.Helper()
-	response := f.request(t, "GET", "/api/rules", "", nil, true)
+	response := f.request(t, "GET", "/api/admin/rules", "", nil, true)
 	expectStatus(t, response, 200)
 	var body struct {
 		Rules []model.Rule `json:"rules"`
@@ -311,7 +315,7 @@ func TestRuleLifecycleRevisionAndSocketRelease(t *testing.T) {
 	port := freeTCPPort(t)
 	enabled := true
 	input := model.Input{Name: "测试入口", Protocol: "tcp", ListenHost: "127.0.0.1", ListenPort: port, TargetHost: "127.0.0.1", TargetPort: 1, Enabled: &enabled}
-	created := f.request(t, "POST", "/api/rules", inputJSON(t, input), nil, true)
+	created := f.request(t, "POST", "/api/admin/rules", inputJSON(t, input), nil, true)
 	expectStatus(t, created, 201)
 	rule := responseRule(t, created)
 	if rule.ID == "" || rule.Revision != 1 || rule.Status != "running" || created.header.Get("ETag") != `"1"` {
@@ -320,7 +324,7 @@ func TestRuleLifecycleRevisionAndSocketRelease(t *testing.T) {
 	if list := ruleList(t, f); len(list) != 1 || list[0].ID != rule.ID {
 		t.Fatalf("列表未返回创建规则：%+v", list)
 	}
-	path := "/api/rules/" + rule.ID
+	path := "/api/admin/rules/" + rule.ID
 	for _, revision := range []string{"", "1", `"0"`, `"invalid"`} {
 		response := f.request(t, "PUT", path, inputJSON(t, input), map[string]string{"If-Match": revision}, true)
 		expectStatus(t, response, 400)
@@ -374,7 +378,7 @@ func TestConcurrentUpdatesCannotOverwriteSameRevision(t *testing.T) {
 	f.login(t)
 	enabled := false
 	input := model.Input{Name: "原名称", Protocol: "udp", ListenHost: "127.0.0.1", ListenPort: 12345, TargetHost: "127.0.0.1", TargetPort: 1, Enabled: &enabled}
-	created := f.request(t, "POST", "/api/rules", inputJSON(t, input), nil, true)
+	created := f.request(t, "POST", "/api/admin/rules", inputJSON(t, input), nil, true)
 	expectStatus(t, created, 201)
 	rule := responseRule(t, created)
 	start := make(chan struct{})
@@ -386,7 +390,7 @@ func TestConcurrentUpdatesCannotOverwriteSameRevision(t *testing.T) {
 			candidate := input
 			candidate.Name = name
 			<-start
-			response = f.request(t, "PUT", "/api/rules/"+rule.ID, inputJSON(t, candidate), map[string]string{"If-Match": `"1"`}, true)
+			response = f.request(t, "PUT", "/api/admin/rules/"+rule.ID, inputJSON(t, candidate), map[string]string{"If-Match": `"1"`}, true)
 		}()
 	}
 	close(start)
@@ -420,7 +424,7 @@ func TestRestartPersistsRulesAndInvalidatesSessions(t *testing.T) {
 	f.login(t)
 	enabled := false
 	input := model.Input{Name: "重启保留", Protocol: "tcp", ListenHost: "127.0.0.1", ListenPort: 12345, TargetHost: "example.com", TargetPort: 443, Enabled: &enabled}
-	created := f.request(t, "POST", "/api/rules", inputJSON(t, input), nil, true)
+	created := f.request(t, "POST", "/api/admin/rules", inputJSON(t, input), nil, true)
 	expectStatus(t, created, 201)
 	rule := responseRule(t, created)
 	cookie, csrf := f.cookie, f.csrf
@@ -428,7 +432,7 @@ func TestRestartPersistsRulesAndInvalidatesSessions(t *testing.T) {
 	restarted := newAPI(t, path, false)
 	restarted.cookie = cookie
 	restarted.csrf = csrf
-	expectCode(t, restarted.request(t, "GET", "/api/rules", "", nil, true), 401, "unauthorized")
+	expectCode(t, restarted.request(t, "GET", "/api/admin/rules", "", nil, true), 401, "unauthorized")
 	restarted.login(t)
 	list := ruleList(t, restarted)
 	if len(list) != 1 || list[0].ID != rule.ID || list[0].Name != "重启保留" || list[0].Status != "disabled" || list[0].Revision != 1 {

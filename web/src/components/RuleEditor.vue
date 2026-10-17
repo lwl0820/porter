@@ -1,17 +1,21 @@
 <script setup lang="ts">
 import { t } from "../i18n";
-import { nextTick, reactive, ref } from "vue";
+import { nextTick, onUnmounted, reactive, ref } from "vue";
 import { ApiError, errorMessage, fieldErrorMessage } from "../api";
 import { protocols, protocolDetails } from "../types";
-import type { FieldErrors, Rule, RuleInput } from "../types";
+import type { FieldErrors, Owner, Rule, RuleInput } from "../types";
 import Modal from "./Modal.vue";
 import Icon from "./Icon.vue";
 
 const props = defineProps<{
   rule?: Rule;
+  ownerOptions?: Owner[];
+  ownerId?: string;
+  portStart?: number;
+  portEnd?: number;
   save: (input: RuleInput) => Promise<void>;
 }>();
-const emit = defineEmits<{ close: []; busy: [value: boolean] }>();
+const emit = defineEmits<{ close: []; owner: [id: string]; busy: [value: boolean] }>();
 const form = reactive({
   name: props.rule?.name ?? "",
   protocol: props.rule?.protocol ?? "tcp",
@@ -26,6 +30,8 @@ const fields = ref<FieldErrors>({});
 const error = ref<unknown>("");
 const busy = ref(false);
 const formElement = ref<HTMLFormElement>();
+let disposed = false;
+onUnmounted(() => { disposed = true; });
 
 function ipAddress(host: string): boolean {
   if (host.includes(":")) {
@@ -57,6 +63,7 @@ function validate(): boolean {
     )
       errors[key] = "请输入 1–65535 的整数端口。";
   }
+  if (props.portStart && props.portEnd && (Number(form.listen_port) < props.portStart || Number(form.listen_port) > props.portEnd)) errors.listen_port = "监听端口必须在分配范围内";
   const host = form.target_host.trim();
   const domain =
     /^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.?$/;
@@ -96,12 +103,14 @@ async function submit(): Promise<void> {
     });
     saved = true;
   } catch (failure) {
+    if (disposed) return;
     error.value = failure;
     if (failure instanceof ApiError) fields.value = failure.fields;
   } finally {
     busy.value = false;
-    emit("busy", false);
+    if (!disposed) emit("busy", false);
   }
+  if (disposed) return;
   if (saved) emit("close");
   else await focusError();
 }
@@ -136,6 +145,13 @@ async function submit(): Promise<void> {
           <Icon name="alert" /><span>{{ errorMessage(error) }}</span>
         </div>
         <fieldset :disabled="busy">
+          <div v-if="ownerOptions" class="field">
+            <label for="rule-owner">{{ t('所属用户') }}</label>
+            <select id="rule-owner" :value="ownerId" :disabled="Boolean(rule)" @change="emit('owner', ($event.target as HTMLSelectElement).value)">
+              <option v-for="owner in ownerOptions" :key="owner.id" :value="owner.id">{{ owner.username }}</option>
+            </select>
+          </div>
+          <p v-if="portStart && portEnd" class="notice subtle">{{ t('可用端口：{start}–{end}', { start: portStart, end: portEnd }) }}</p>
           <div class="field">
             <label for="rule-name">{{ t("规则名称") }}</label
             ><input

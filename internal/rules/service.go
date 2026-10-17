@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -39,24 +40,37 @@ func problem(status int, code, message string) *Error {
 }
 
 type Service struct {
-	mu          sync.Mutex
-	repo        Repository
-	engine      *forward.Engine
-	items       map[string]model.Rule
-	running     map[string]*runtimeGroup
-	monitors    sync.WaitGroup
-	adminHost   netip.Addr
-	adminPort   int
-	closed      bool
-	traffic     map[string]*forward.Traffic
-	persisted   map[string]model.Traffic
-	stopTraffic chan struct{}
-	trafficDone chan struct{}
-	closeOnce   sync.Once
-	closeErr    error
+	mu             sync.Mutex
+	repo           Repository
+	engine         *forward.Engine
+	items          map[string]model.Rule
+	running        map[string]*runtimeGroup
+	monitors       sync.WaitGroup
+	adminHost      netip.Addr
+	adminPort      int
+	closed         bool
+	traffic        map[string]*forward.Traffic
+	persisted      map[string]model.Traffic
+	stopTraffic    chan struct{}
+	trafficDone    chan struct{}
+	closeOnce      sync.Once
+	closeErr       error
+	accounts       AccountRepository
+	users          map[string]model.User
+	plans          map[string]model.Plan
+	meters         map[string]*userMeter
+	quotaEvents    chan struct{}
+	flushInterval  time.Duration
+	persistedUsage map[string]model.Usage
+	now            func() time.Time
 }
 
-func New(ctx context.Context, repo Repository, engine *forward.Engine, adminAddr string) (*Service, error) {
+type Options struct {
+	FlushInterval time.Duration
+	Now           func() time.Time
+}
+
+func New(ctx context.Context, repo Repository, engine *forward.Engine, adminAddr string, options ...Options) (*Service, error) {
 	h, p, err := net.SplitHostPort(adminAddr)
 	if err != nil {
 		return nil, err
@@ -74,6 +88,27 @@ func New(ctx context.Context, repo Repository, engine *forward.Engine, adminAddr
 		return nil, fmt.Errorf("管理监听地址必须是 IP：%w", err)
 	}
 	s := &Service{repo: repo, engine: engine, items: make(map[string]model.Rule), running: make(map[string]*runtimeGroup), adminHost: addr.Unmap(), adminPort: port, traffic: make(map[string]*forward.Traffic), persisted: make(map[string]model.Traffic), stopTraffic: make(chan struct{}), trafficDone: make(chan struct{})}
+	s.flushInterval = 5 * time.Second
+	s.now = time.Now
+	if len(options) > 0 {
+		if options[0].FlushInterval > 0 {
+			s.flushInterval = options[0].FlushInterval
+		}
+		if options[0].Now != nil {
+			s.now = options[0].Now
+		}
+	}
+	s.users = make(map[string]model.User)
+	s.plans = make(map[string]model.Plan)
+	s.meters = make(map[string]*userMeter)
+	s.persistedUsage = make(map[string]model.Usage)
+	s.quotaEvents = make(chan struct{}, 1)
+	if accountRepo, ok := repo.(AccountRepository); ok {
+		s.accounts = accountRepo
+		if err := s.loadAccounts(ctx); err != nil {
+			return nil, err
+		}
+	}
 	items, err := repo.List(ctx)
 	if err != nil {
 		return nil, err
@@ -93,6 +128,25 @@ func New(ctx context.Context, repo Repository, engine *forward.Engine, adminAddr
 			s.setError(r, err)
 			continue
 		}
+		if err := s.validateOwnerPort(r); err != nil {
+			s.setError(r, err)
+			continue
+		}
+		if meter := s.meters[r.OwnerID]; meter != nil {
+			if _, pending := meter.pendingUsage(); pending {
+				r.Status = "error"
+				r.LastErrorCode = "quota_reset_pending"
+				r.LastError = "流量周期重置暂未完成，正在重试"
+				s.items[r.ID] = r
+				continue
+			}
+			if meter.Snapshot().Exceeded {
+				r.Status = "quota_exceeded"
+				s.items[r.ID] = r
+				continue
+			}
+		}
+
 		group, e := s.prepareGroup(r, nil)
 		if e != nil {
 			s.setError(r, e)
@@ -145,6 +199,15 @@ func (s *Service) view(r model.Rule) (result model.Rule) {
 		r.LastErrorCode = ""
 		return r
 	}
+	if meter := s.meters[r.OwnerID]; meter != nil && r.LastErrorCode == "quota_reset_pending" && meter.pending() {
+		return r
+	}
+	if meter := s.meters[r.OwnerID]; meter != nil && meter.Snapshot().Exceeded {
+		r.Status = "quota_exceeded"
+		r.LastError = ""
+		r.LastErrorCode = ""
+		return r
+	}
 	if group := s.running[r.ID]; group != nil {
 		if err := group.failure(); err == nil {
 			r.Status = "running"
@@ -169,6 +232,10 @@ func (s *Service) Save(ctx context.Context, id string, revision int64, input mod
 	if s.closed {
 		return model.Rule{}, problem(503, "shutting_down", "服务正在停止")
 	}
+	return s.saveLocked(ctx, id, revision, input, model.AdminID)
+}
+
+func (s *Service) saveLocked(ctx context.Context, id string, revision int64, input model.Input, ownerID string) (model.Rule, error) {
 	create := id == ""
 	old, exists := s.items[id]
 	if !create {
@@ -182,6 +249,13 @@ func (s *Service) Save(ctx context.Context, id string, revision int64, input mod
 	if create && len(s.items) >= 1000 {
 		return model.Rule{}, problem(409, "rule_limit", "最多保存 1000 条规则")
 	}
+	effectiveOwner := ownerID
+	if !create {
+		effectiveOwner = old.OwnerID
+	}
+	if err := s.validateOwner(model.Rule{OwnerID: effectiveOwner, ListenPort: input.ListenPort, Enabled: input.Enabled == nil || *input.Enabled}); err != nil {
+		return model.Rule{}, err
+	}
 	r, err := s.validate(input, id)
 	if err != nil {
 		return model.Rule{}, err
@@ -189,7 +263,14 @@ func (s *Service) Save(ctx context.Context, id string, revision int64, input mod
 	if input.TrafficEnabled == nil {
 		r.TrafficEnabled = old.TrafficEnabled
 	}
-	now := time.Now().UTC()
+	r.OwnerID = ownerID
+	if !create {
+		r.OwnerID = old.OwnerID
+	}
+	if err := s.validateOwner(r); err != nil {
+		return model.Rule{}, err
+	}
+	now := s.now().UTC()
 	r.ID = id
 	r.Revision = old.Revision + 1
 	r.CreatedAt = old.CreatedAt
@@ -268,6 +349,10 @@ func (s *Service) Delete(ctx context.Context, id string, revision int64) error {
 	if s.closed {
 		return problem(503, "shutting_down", "服务正在停止")
 	}
+	return s.deleteLocked(ctx, id, revision)
+}
+
+func (s *Service) deleteLocked(ctx context.Context, id string, revision int64) error {
 	r, exists := s.items[id]
 	if !exists {
 		return problem(404, "not_found", "规则不存在")
@@ -296,12 +381,19 @@ func (s *Service) Retry(id string, revision int64) (model.Rule, error) {
 	if s.closed {
 		return model.Rule{}, problem(503, "shutting_down", "服务正在停止")
 	}
+	return s.retryLocked(id, revision)
+}
+
+func (s *Service) retryLocked(id string, revision int64) (model.Rule, error) {
 	r, ok := s.items[id]
 	if !ok {
 		return model.Rule{}, problem(404, "not_found", "规则不存在")
 	}
 	if r.Revision != revision {
 		return model.Rule{}, problem(412, "revision_mismatch", "规则已被修改，请刷新后重试")
+	}
+	if err := s.validateOwner(r); err != nil {
+		return model.Rule{}, err
 	}
 	if !r.Enabled {
 		return model.Rule{}, problem(409, "disabled", "请先启用规则")
@@ -342,7 +434,7 @@ func (s *Service) Close() error {
 			group.stop()
 			delete(s.running, id)
 		}
-		s.closeErr = s.flushTraffic(context.Background())
+		s.closeErr = errors.Join(s.settleCycles(context.Background()), s.flushTraffic(context.Background()), s.flushUsages(context.Background()))
 		s.mu.Unlock()
 		s.monitors.Wait()
 		if s.closeErr != nil {

@@ -6,16 +6,16 @@
 
 ## 2. 签名与模块职责
 
-- `src/api.ts`：唯一 fetch 与运行时响应校验边界，导出 `api`、`ApiError`、`setSession`。
+- `src/api.ts`：唯一 fetch 与运行时响应校验边界，`createClient(role)` 创建独立客户端，导出 `adminApi`、`userApi` 和 `ApiError`；setSession/onUnauthorized 属于各自客户端，不使用共享全局 CSRF。
 - `src/types.ts`：Rule、RuleInput、Session、FieldErrors 契约；规则输入包括独立的 traffic_enabled 开关，Rule 另含只读 traffic；`protocols`、`protocolDetails`、`isProtocol`、`matchesProtocol` 集中维护协议选项、展示与筛选。
-- `src/App.vue`：登录、列表、搜索筛选、轮询与写操作协调。
+- `src/admin.ts`、`src/AdminApp.vue` 和 `src/user.ts`、`src/UserApp.vue`：独立页面入口与根组件；`src/App.vue` 复用登录/规则布局，但角色由入口固定，不能从会话切换成另一端。
 - `src/components/RuleEditor.vue`：规则表单、字段校验、转发变更提示。
 - `src/components/Modal.vue`：原生 dialog、初始焦点与关闭后焦点恢复。
 - `web/embed.go`：`Handler() http.Handler`，内嵌 `dist` 并提供静态文件服务。
 
 ## 3. 请求与状态契约
 
-所有请求同源，Cookie 不进入 localStorage；登录或会话恢复后保存内存 CSRF token，修改请求通过 `X-CSRF-Token` 发送。PUT、DELETE、重试使用带引号的 `If-Match`。GET 列表解析 `{rules: Rule[]}`，新增和修改解析单条 Rule。
+所有请求同源，Cookie 不进入 localStorage；登录或会话恢复后保存内存 CSRF token，修改请求通过 `X-CSRF-Token` 发送。PUT、DELETE、重试使用带引号的 `If-Match`。规则路径分别在 `/api/admin` 和 `/api/user` 下，GET 列表解析 `{rules: Rule[]}`，新增和修改解析单条 Rule；管理端规则还须校验 owner 与 owner_id 一致。
 
 新增和修改只序列化 RuleInput，不能展开完整 Rule 回传元数据。所有 unknown 响应在 api.ts 中校验，组件不重复类型断言。412 提示关闭编辑器并刷新，不静默重试覆盖。
 
@@ -76,7 +76,7 @@
 
 - RuleInput 增加 `traffic_enabled: boolean`，新增默认 false；Rule 包含只读 traffic 对象。
 - `api.ts` 是统计响应校验的唯一边界；组件只能读取校验后的类型。
-- 重置调用 `POST /api/rules/{id}/traffic/reset`，沿用内存 CSRF 与 If-Match，返回最新 Rule 后更新 revision。
+- 重置调用 `POST /api/admin/rules/{id}/traffic/reset` 或 `/api/user/rules/{id}/traffic/reset`，沿用内存 CSRF 与 If-Match，返回最新 Rule 后更新 revision。
 
 ### 8.3 数据与交互契约
 
@@ -156,3 +156,60 @@
 错误：`error.value = t("操作失败，请稍后重试。")`，再直接渲染字符串，切换后仍显示旧语言。
 
 正确：保留错误对象或词条键，在模板中调用 `errorMessage(error)` 或 `t(key)`；动态名称和计数使用词条参数，Vue 负责文本转义。
+
+
+## 10. 场景：独立双端、所属用户与套餐界面
+
+### 10.1 范围与入口
+
+适用于管理端 /admin/、用户端 /user/ 的独立入口、身份、规则、套餐、用户及配置界面。两个入口由 Vite 多页面构建为 dist/admin/index.html 和 dist/user/index.html，Go 静态处理器显式映射合法深链接；根地址跳管理端，不把 /api/* 错误兜底成前端首页。
+
+### 10.2 签名与模块职责
+
+- createClient(role:Role) 固定 /api/admin 或 /api/user 请求前缀，每个客户端独立维护 setSession、onUnauthorized、CSRF 和 generation。AdminApp/UserApp 使用固定端实例，不通过隐藏按钮代替服务端鉴权。
+- Session 包含 user_id、username、role 和 csrf_token，解码必须核对当前端角色。Rule 包含 owner_id，管理端必须有 owner={id,username,role}；输入不能展开响应对象。
+- AdminResources 提供套餐与用户添加/查看、系统端口池配置；AccountOverview 展示普通用户自身套餐和当前周期；RuleEditor 复用字段，接收所属用户的端口边界和管理端可选归属。
+- traffic.ts 提供精确字节及 GiB 转换，累计和额度通过 BigInt 处理；不使用 Number 字节后再计算或反向生成额度。
+
+### 10.3 请求、响应与状态契约
+
+管理端规则列表默认全部，所属用户在桌面表格和窄屏卡片均显示。表格使用命名 colgroup 管理列宽，管理端九列、用户端八列；空间不足整体横向滚动，不得沿用新增列前的 nth-child 宽度造成地址、统计和操作重叠。用户筛选包含管理员自己，以稳定 ID 请求 /api/admin/rules?owner_id=...，与原有名称/地址搜索、协议和状态组合。切换筛选使旧请求失效；任何旧结果、失败或 finally 都不能覆盖当前筛选或会话。
+
+管理员新增规则可选择已有账号，POST 的专用输入附加 owner_id；编辑已有规则展示但锁定归属，更新只提交 RuleInput。所属用户为普通账号时显示并校验其分配端口，管理员本人无套餐范围；不能据操作者身份取消目标用户约束。管理端直接完成任意用户规则的全部现有操作，用户端仅请求本人接口，不提供跨账号选择。
+
+管理端 plans 返回 {plans:Plan[]}，users 返回 {users:Account[]}，settings 返回 {port_start,port_end,revision}；未配置时两个端口为 0。Account={user,plan,usage}，字节为十进制字符串，UTC 时间为有效 RFC3339。全部 unknown 在 api.ts 校验，不在组件内重复 cast。
+
+套餐支持 both/max/upload/download 四种计费及 calendar_month/anniversary/fixed_day 三种周期。固定日期时显示 1–31，其他模式提交 reset_day:null。单向准确标为“上下行较大值”，不是只上行；用量对全用户周期汇总。额度输入 GiB 且不能经浮点丢失字节精度。
+
+用户概览显示分配范围、上下行、计费用量/额度、计费方式及下次 UTC 重置。quota_exceeded 与手动 disabled 和监听 error 分开显示；error + quota_reset_pending 使用独立双语提示并保留重试按钮；清零规则展示统计不能伪造套餐退款。
+
+两端会话和 Cookie 独立，同浏览器同时登录可用，401、退出和旧请求失败只复位本端。客户端 generation 与页面 sessionVersion 同时保护旧请求：旧登录成功、旧写入 catch/finally、旧读取响应均不得污染新账号。修改类动作使用本端 CSRF 及适当 If-Match。
+
+所有新增表单使用 novalidate 和本地已翻译字段提示，不能让浏览器原生气泡决定英文/中文提示。配置更新遇 412 保留错误并允许明确重新读取新 revision，不自动覆盖其他页面修改；刷新成功后才允许基于新版本再次保存。
+
+### 10.4 校验与错误矩阵
+
+| 条件 | 行为 |
+| --- | --- |
+| 管理规则缺失 owner、owner_id 不匹配、非法套餐/用量/UTC 字段 | 拒绝解码并保留原列表，不将未知数据写入页面。 |
+| 普通用户端收到管理员 Session 或反之 | 会话无效，不能渲染另一端功能。 |
+| 用户规则端口越界 | 表单字段错误并聚焦，服务端仍是权威校验方。 |
+| 套餐用尽 | 显示额度状态和下次重置，操作失败保持真实规则状态。 |
+| 系统配置 revision 过期 | 不自动覆盖；明确刷新取得新版本后可重试。 |
+| 写操作后旧请求返回、旧会话401或失败 | 不清空新账号、不覆盖已更新资源、不复位新操作的 busy 状态。 |
+
+### 10.5 正常、基础与异常案例
+
+- 正常：管理员筛选 alice，只显示其规则；修改规则后 alice 用户端刷新看到新名称，管理端操作仍保留 alice 归属。
+- 基础：同浏览器管理员与普通用户同时登录，退出用户端后刷新管理端仍为登录态；两种语言与 390px 窄屏均可操作。
+- 异常：快速切换用户筛选，旧响应晚到不覆盖当前用户；配置保存 412 后手动刷新不会继续用旧 revision。
+
+### 10.6 必需验证
+
+在保留原有规则管理、组合协议、统计及双语行为测试基础上，增加双端固定前缀和 CSRF 独立、所属用户显示/筛选/代操作、越界拒绝、精确 GiB、套餐与用户表单、UTC 概览、配置冲突刷新、跨会话旧写入和迟到读取回归。实际浏览器验证管理与用户两端桌面/窄屏，两种语言，以及独立退出；生产构建后验证 Go 嵌入首页、深链接和 API 404。
+
+### 10.7 错误与正确写法
+
+错误：两个页面共用一个全局 csrf 或可切换 role 的请求对象；用完整 Rule 展开提交 owner；只在表格显示归属而遗漏窄屏卡片；在 catch 中无版本校验地清除新会话。
+
+正确：固定角色入口绑定独立客户端实例，业务输入显式序列化；管理端专用创建输入只在创建时增加 owner_id；表格和卡片使用同一权威所属信息；读取和写入完成均核对当前请求/会话版本。

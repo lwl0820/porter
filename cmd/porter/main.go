@@ -48,6 +48,9 @@ func run() (result error) {
 		return err
 	}
 	defer db.Close()
+	if _, err := db.EnsureAdmin(context.Background(), cfg.Username); err != nil {
+		return err
+	}
 	host, _, _ := net.SplitHostPort(cfg.HTTPAddr)
 	network := "tcp4"
 	if strings.Contains(host, ":") {
@@ -58,7 +61,7 @@ func run() (result error) {
 		return fmt.Errorf("管理端口监听失败：%w", err)
 	}
 	defer listener.Close()
-	service, err := rules.New(context.Background(), db, forward.New(forward.Limits{Global: cfg.MaxSessions, PerRule: cfg.MaxSessionsPerRule, UDPIdle: cfg.UDPIdle, DialTimeout: cfg.DialTimeout}), listener.Addr().String())
+	service, err := rules.New(context.Background(), db, forward.New(forward.Limits{Global: cfg.MaxSessions, PerRule: cfg.MaxSessionsPerRule, UDPIdle: cfg.UDPIdle, DialTimeout: cfg.DialTimeout}), listener.Addr().String(), rules.Options{FlushInterval: cfg.TrafficFlushInterval})
 	if err != nil {
 		return err
 	}
@@ -66,7 +69,9 @@ func run() (result error) {
 		result = errors.Join(result, service.Close())
 		slog.Info("Porter 已停止")
 	}()
-	handler := httpapi.New(service, auth.New(cfg.Username, cfg.Password), db, cfg.CookieSecure, web.Handler())
+	manager := auth.New(cfg.Username, cfg.Password)
+	manager.SetUsers(db)
+	handler := httpapi.New(service, manager, db, cfg.CookieSecure, web.Handler())
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()

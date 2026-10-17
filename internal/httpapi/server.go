@@ -20,7 +20,23 @@ import (
 	"github.com/lwl0820/porter/internal/rules"
 )
 
-const cookieName = "porter_session"
+const cookieName = "porter_admin_session"
+
+func portal(r *http.Request) string {
+	if strings.HasPrefix(r.URL.Path, "/api/admin/") {
+		return model.RoleAdmin
+	}
+	return model.RoleUser
+}
+func portalCookie(role string) string {
+	if role == model.RoleAdmin {
+		return cookieName
+	}
+	return "porter_user_session"
+}
+func actor(session auth.Session) model.User {
+	return model.User{ID: session.UserID, Username: session.Username, Role: session.Role}
+}
 
 type Pinger interface{ Ping(context.Context) error }
 type Server struct {
@@ -33,15 +49,25 @@ type Server struct {
 func New(service *rules.Service, manager *auth.Manager, db Pinger, secure bool, assets http.Handler) http.Handler {
 	s := &Server{rules: service, auth: manager, db: db, secure: secure}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/auth/login", s.login)
-	mux.HandleFunc("GET /api/auth/session", s.protect(s.session))
-	mux.HandleFunc("POST /api/auth/logout", s.protect(s.logout))
-	mux.HandleFunc("GET /api/rules", s.protect(s.list))
-	mux.HandleFunc("POST /api/rules", s.protect(s.create))
-	mux.HandleFunc("PUT /api/rules/{id}", s.protect(s.update))
-	mux.HandleFunc("DELETE /api/rules/{id}", s.protect(s.remove))
-	mux.HandleFunc("POST /api/rules/{id}/retry", s.protect(s.retry))
-	mux.HandleFunc("POST /api/rules/{id}/traffic/reset", s.protect(s.resetTraffic))
+	for _, role := range []string{model.RoleAdmin, model.RoleUser} {
+		prefix := "/api/" + role
+		mux.HandleFunc("POST "+prefix+"/auth/login", s.login)
+		mux.HandleFunc("GET "+prefix+"/auth/session", s.protect(s.session))
+		mux.HandleFunc("POST "+prefix+"/auth/logout", s.protect(s.logout))
+		mux.HandleFunc("GET "+prefix+"/rules", s.protect(s.list))
+		mux.HandleFunc("POST "+prefix+"/rules", s.protect(s.create))
+		mux.HandleFunc("PUT "+prefix+"/rules/{id}", s.protect(s.update))
+		mux.HandleFunc("DELETE "+prefix+"/rules/{id}", s.protect(s.remove))
+		mux.HandleFunc("POST "+prefix+"/rules/{id}/retry", s.protect(s.retry))
+		mux.HandleFunc("POST "+prefix+"/rules/{id}/traffic/reset", s.protect(s.resetTraffic))
+	}
+	mux.HandleFunc("GET /api/admin/plans", s.protect(s.plans))
+	mux.HandleFunc("POST /api/admin/plans", s.protect(s.createPlan))
+	mux.HandleFunc("GET /api/admin/users", s.protect(s.users))
+	mux.HandleFunc("POST /api/admin/users", s.protect(s.createUser))
+	mux.HandleFunc("GET /api/admin/settings", s.protect(s.settings))
+	mux.HandleFunc("PUT /api/admin/settings", s.protect(s.saveSettings))
+	mux.HandleFunc("GET /api/user/account", s.protect(s.account))
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		failure(w, &rules.Error{Status: 404, Code: "not_found", Message: "接口不存在"})
@@ -77,13 +103,17 @@ func (s *Server) origin(r *http.Request) bool {
 
 func (s *Server) protect(next func(http.ResponseWriter, *http.Request, auth.Session)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie(cookieName)
+		cookie, err := r.Cookie(portalCookie(portal(r)))
 		if err != nil {
 			failure(w, &rules.Error{Status: 401, Code: "unauthorized", Message: "请先登录"})
 			return
 		}
-		session, ok := s.auth.Get(cookie.Value)
+		session, ok := s.auth.GetPortal(cookie.Value, portal(r))
 		if !ok {
+			if _, exists := s.auth.Get(cookie.Value); exists {
+				failure(w, &rules.Error{Status: 403, Code: "forbidden", Message: "会话不属于当前后台"})
+				return
+			}
 			failure(w, &rules.Error{Status: 401, Code: "unauthorized", Message: "登录已过期，请重新登录"})
 			return
 		}
@@ -118,37 +148,47 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &input) {
 		return
 	}
-	token, session, ok := s.auth.Login(input.Username, input.Password)
+	token, session, ok := s.auth.LoginPortal(r.Context(), portal(r), input.Username, input.Password)
 	if !ok {
 		failure(w, &rules.Error{Status: 401, Code: "credentials_invalid", Message: "用户名或密码错误"})
 		return
 	}
-	if old, err := r.Cookie(cookieName); err == nil {
-		s.auth.Logout(old.Value)
+	if old, err := r.Cookie(portalCookie(portal(r))); err == nil {
+		s.auth.LogoutPortal(old.Value, portal(r))
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: "/", Expires: session.Expires, MaxAge: 43200, HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteStrictMode})
-	slog.Info("管理员已登录")
+	http.SetCookie(w, &http.Cookie{Name: portalCookie(portal(r)), Value: token, Path: "/api/" + portal(r), Expires: session.Expires, MaxAge: 43200, HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteStrictMode})
+	slog.Info("账号已登录", "user_id", session.UserID, "portal", portal(r))
 	write(w, 200, session)
 }
 func (s *Server) session(w http.ResponseWriter, r *http.Request, session auth.Session) {
 	write(w, 200, session)
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request, session auth.Session) {
-	if c, err := r.Cookie(cookieName); err == nil {
-		s.auth.Logout(c.Value)
+	if c, err := r.Cookie(portalCookie(portal(r))); err == nil {
+		s.auth.LogoutPortal(c.Value, portal(r))
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: portalCookie(portal(r)), Path: "/api/" + portal(r), MaxAge: -1, HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteStrictMode})
 	w.WriteHeader(204)
 }
 func (s *Server) list(w http.ResponseWriter, r *http.Request, session auth.Session) {
-	write(w, 200, map[string]any{"rules": s.rules.List()})
+	write(w, 200, map[string]any{"rules": s.rules.ListFor(actor(session), r.URL.Query().Get("owner_id"))})
 }
 func (s *Server) create(w http.ResponseWriter, r *http.Request, session auth.Session) {
 	var input model.Input
-	if !decode(w, r, &input) {
+	owner := session.UserID
+	if portal(r) == model.RoleAdmin {
+		var adminInput model.AdminRuleCreateInput
+		if !decode(w, r, &adminInput) {
+			return
+		}
+		input = adminInput.Input
+		if adminInput.OwnerID != "" {
+			owner = adminInput.OwnerID
+		}
+	} else if !decode(w, r, &input) {
 		return
 	}
-	rule, err := s.rules.Save(r.Context(), "", 0, input)
+	rule, err := s.rules.SaveFor(r.Context(), actor(session), owner, "", 0, input)
 	if err != nil {
 		failure(w, err)
 		return
@@ -169,7 +209,7 @@ func (s *Server) update(w http.ResponseWriter, r *http.Request, session auth.Ses
 		failure(w, &rules.Error{Status: 400, Code: "validation_error", Message: "请提供规则启用状态", Fields: map[string]string{"enabled": "启用状态不能为空"}})
 		return
 	}
-	rule, err := s.rules.Save(r.Context(), r.PathValue("id"), revision, input)
+	rule, err := s.rules.SaveFor(r.Context(), actor(session), "", r.PathValue("id"), revision, input)
 	if err != nil {
 		failure(w, err)
 		return
@@ -182,7 +222,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request, session auth.Ses
 	if !ok {
 		return
 	}
-	if err := s.rules.Delete(r.Context(), r.PathValue("id"), revision); err != nil {
+	if err := s.rules.DeleteFor(r.Context(), actor(session), r.PathValue("id"), revision); err != nil {
 		failure(w, err)
 		return
 	}
@@ -193,11 +233,12 @@ func (s *Server) retry(w http.ResponseWriter, r *http.Request, session auth.Sess
 	if !ok {
 		return
 	}
-	rule, err := s.rules.Retry(r.PathValue("id"), revision)
+	rule, err := s.rules.RetryFor(actor(session), r.PathValue("id"), revision)
 	if err != nil {
 		failure(w, err)
 		return
 	}
+	w.Header().Set("ETag", etag(rule.Revision))
 	write(w, 200, rule)
 }
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
@@ -268,7 +309,7 @@ func (s *Server) resetTraffic(w http.ResponseWriter, r *http.Request, session au
 	if !ok {
 		return
 	}
-	rule, err := s.rules.ResetTraffic(r.Context(), r.PathValue("id"), revision)
+	rule, err := s.rules.ResetTrafficFor(r.Context(), actor(session), r.PathValue("id"), revision)
 	if err != nil {
 		failure(w, err)
 		return

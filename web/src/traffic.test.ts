@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api } from "./api";
+import { adminApi as api } from "./api";
 import { formatBytes, formatSpeed } from "./traffic";
 
 const rule = {
+  owner_id: "admin", owner: { id: "admin", username: "admin", role: "admin" },
   id: "r", name: "规则", protocol: "tcp", listen_host: "127.0.0.1", listen_port: 1234,
   target_host: "example.com", target_port: 443, enabled: true, traffic_enabled: true,
   revision: 1, created_at: "2026-10-17T00:00:00Z", updated_at: "2026-10-17T00:00:00Z", status: "running",

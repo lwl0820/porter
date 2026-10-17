@@ -10,15 +10,16 @@ import (
 )
 
 type Config struct {
-	Username           string
-	Password           string
-	HTTPAddr           string
-	DBPath             string
-	CookieSecure       bool
-	MaxSessions        int
-	MaxSessionsPerRule int
-	UDPIdle            time.Duration
-	DialTimeout        time.Duration
+	Username             string
+	Password             string
+	HTTPAddr             string
+	DBPath               string
+	CookieSecure         bool
+	MaxSessions          int
+	MaxSessionsPerRule   int
+	UDPIdle              time.Duration
+	DialTimeout          time.Duration
+	TrafficFlushInterval time.Duration
 }
 
 func Load() (Config, error) {
@@ -47,6 +48,9 @@ func Load() (Config, error) {
 		return c, err
 	}
 	if c.DialTimeout, err = duration("PORTER_DIAL_TIMEOUT", "5s"); err != nil {
+		return c, err
+	}
+	if c.TrafficFlushInterval, err = duration("PORTER_TRAFFIC_FLUSH_INTERVAL", "5s"); err != nil {
 		return c, err
 	}
 	return c, nil

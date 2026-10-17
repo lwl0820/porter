@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { initializeLanguage, language, t, type MessageKey } from "./i18n";
 import LanguageSwitcher from "./components/LanguageSwitcher.vue";
-import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import {
-  api, ApiError, errorMessage, ruleErrorMessage, onUnauthorized, setSession,
+  adminApi, userApi, ApiError, errorMessage, ruleErrorMessage,
 } from "./api";
 import {
   address,
@@ -15,7 +15,7 @@ import {
   type Rule,
   type RuleInput,
   type RuleStatus,
-  type Session,
+  type Session, type Role, type Account,
 } from "./types";
 import Icon from "./components/Icon.vue";
 import Modal from "./components/Modal.vue";
@@ -23,6 +23,26 @@ import RuleActions from "./components/RuleActions.vue";
 import RuleTraffic from "./components/RuleTraffic.vue";
 import RuleEditor from "./components/RuleEditor.vue";
 
+import AdminResources from "./components/AdminResources.vue";
+import AccountOverview from "./components/AccountOverview.vue";
+const props = withDefaults(defineProps<{ role?: Role }>(), { role: "admin" });
+const isAdmin = props.role === "admin";
+const api = isAdmin ? adminApi : userApi;
+const { setSession, onUnauthorized } = api;
+const validPages = isAdmin ? ["rules", "plans", "users", "settings"] : ["rules", "account"];
+const initialPage = window.location.pathname.split("/")[2] || "rules";
+const page = ref(validPages.includes(initialPage) ? initialPage : "rules");
+const resourceBusy = ref(false);
+const resourcePages: { value: string; label: MessageKey }[] = [{ value: "plans", label: "套餐管理" }, { value: "users", label: "用户管理" }, { value: "settings", label: "系统配置" }];
+const users = ref<Account[]>([]);
+const account = ref<Account>();
+const ownerId = ref("");
+const editorOwner = ref("");
+const ownerOptions = computed(() => session.value ? [
+  { id: session.value.user_id, username: session.value.username, role: session.value.role },
+  ...users.value.map(item => item.user),
+] : []);
+const editorAccount = computed(() => isAdmin ? users.value.find(item => item.user.id === editorOwner.value) : account.value);
 initializeLanguage();
 
 const session = ref<Session>();
@@ -78,14 +98,14 @@ const filteredRules = computed(() => {
   );
 });
 const hasFilters = computed(() =>
-  Boolean(search.value || protocol.value || status.value),
+  Boolean(search.value || protocol.value || status.value || ownerId.value),
 );
 const refreshingText = computed(
   () =>
     lastRefresh.value?.toLocaleTimeString(language.value, { hour12: false }) ??
     t("尚未同步"),
 );
-const mutationBusy = computed(() => Boolean(busy.value) || editorBusy.value);
+const mutationBusy = computed(() => Boolean(busy.value) || editorBusy.value || resourceBusy.value);
 
 function notify(message: MessageKey): void {
   announcement.value = message;
@@ -105,6 +125,8 @@ function expireSession(): void {
   setSession();
   session.value = undefined;
   rules.value = [];
+  users.value = []; account.value = undefined; ownerId.value = ""; page.value = "rules";
+  password.value = ""; busy.value = ""; resourceBusy.value = false; announcement.value = ""; deleteError.value = ""; resetError.value = "";
   loaded.value = false;
   editorOpen.value = false;
   editorBusy.value = false;
@@ -121,9 +143,15 @@ async function loadRules(): Promise<void> {
   requestController = new AbortController();
   loading.value = true;
   try {
-    const result = await api.rules(requestController.signal);
+    const signal = requestController.signal;
+    const [result, resources] = await Promise.all([
+      api.rules(signal, isAdmin ? ownerId.value : ""),
+      isAdmin ? api.users(signal) : api.account(signal),
+    ]);
     if (version !== requestVersion || !session.value) return;
     rules.value = result;
+    if (Array.isArray(resources)) users.value = resources;
+    else account.value = resources;
     loaded.value = true;
     listError.value = "";
     lastRefresh.value = new Date();
@@ -158,7 +186,7 @@ async function login(): Promise<void> {
   loginError.value = "";
   if (!username.value.trim() || !password.value) {
     const missingUsername = !username.value.trim();
-    loginError.value = missingUsername ? "请输入管理员用户名" : "请输入密码";
+    loginError.value = missingUsername ? (isAdmin ? "请输入管理员用户名" : "请输入用户名") : "请输入密码";
     await nextTick();
     (missingUsername ? loginInput.value : passwordInput.value)?.focus();
     return;
@@ -180,6 +208,7 @@ async function login(): Promise<void> {
 async function logout(): Promise<void> {
   if (mutationBusy.value) return;
   busy.value = "logout";
+  const version = sessionVersion;
   stopListRequest();
   try {
     await api.logout();
@@ -187,19 +216,20 @@ async function logout(): Promise<void> {
     loginError.value = "";
     username.value = "";
   } catch (error) {
-    if (session.value) actionError.value = error;
+    if (version === sessionVersion && session.value) actionError.value = error;
   } finally {
-    busy.value = "";
+    if (version === sessionVersion) busy.value = "";
   }
 }
 function openEditor(rule?: Rule): void {
   editingRule.value = rule ? { ...rule } : undefined;
+  editorOwner.value = rule?.owner_id ?? (ownerId.value || session.value?.user_id || "");
   editorOpen.value = true;
 }
 function mergeRule(rule: Rule): void {
   const index = rules.value.findIndex((item) => item.id === rule.id);
   if (index >= 0) rules.value[index] = rule;
-  else rules.value.push(rule);
+  else if (!isAdmin || !ownerId.value || ownerId.value === rule.owner_id) rules.value.push(rule);
   loaded.value = true;
   lastRefresh.value = new Date();
 }
@@ -209,11 +239,12 @@ async function save(input: RuleInput): Promise<void> {
   try {
     const result = editingRule.value
       ? await api.update(editingRule.value, input)
-      : await api.create(input);
+      : await api.create(input, editorOwner.value);
     if (version !== sessionVersion) return;
     mergeRule(result);
     notify(editingRule.value ? "规则已更新" : "规则已创建");
   } catch (error) {
+    if (version !== sessionVersion) return;
     if (error instanceof ApiError && error.status === 412)
       listError.value = "规则已在其他页面变更，请刷新后重新编辑。";
     throw error;
@@ -246,9 +277,9 @@ async function mutate(
           : "规则已停用，现有会话已断开",
     );
   } catch (error) {
-    if (session.value) actionError.value = error;
+    if (version === sessionVersion && session.value) actionError.value = error;
   } finally {
-    busy.value = "";
+    if (version === sessionVersion) busy.value = "";
   }
 }
 function confirmReset(rule: Rule): void {
@@ -269,9 +300,9 @@ async function resetTraffic(): Promise<void> {
     resettingRule.value = undefined;
     notify("流量已重置");
   } catch (error) {
-    if (session.value) resetError.value = error;
+    if (version === sessionVersion && session.value) resetError.value = error;
   } finally {
-    busy.value = "";
+    if (version === sessionVersion) busy.value = "";
   }
 }
 function confirmDelete(rule: Rule): void {
@@ -292,12 +323,13 @@ async function remove(): Promise<void> {
     deletingRule.value = undefined;
     notify("规则已删除");
   } catch (error) {
-    deleteError.value = error;
+    if (version === sessionVersion && session.value) deleteError.value = error;
   } finally {
-    busy.value = "";
+    if (version === sessionVersion) busy.value = "";
   }
 }
 function clearFilters(): void {
+  ownerId.value = "";
   search.value = "";
   protocol.value = "";
   status.value = "";
@@ -326,6 +358,11 @@ function searchShortcut(event: KeyboardEvent): void {
 function visibilityChanged(): void {
   if (document.visibilityState === "visible") void loadRules();
 }
+
+function resourcesChanged(): void { stopListRequest(); void loadRules(); }
+watch(page, value => { if (session.value) window.history.replaceState(null, "", `/${props.role}/${value}`); });
+watch(session, value => { window.history.replaceState(null, "", `/${props.role}/${value ? page.value : "login"}`); });
+watch(ownerId, () => { stopListRequest(); rules.value = []; loaded.value = false; void loadRules(); });
 
 onMounted(() => {
   onUnauthorized(expireSession);
@@ -367,7 +404,7 @@ onUnmounted(() => {
 
   <main v-else-if="!session" class="login-page">
     <section class="login-story" :aria-label="t('Porter 介绍')">
-      <a class="brand" href="/" :aria-label="t('Porter 首页')"
+      <a class="brand" :href="isAdmin ? '/admin/' : '/user/'" :aria-label="t('Porter 首页')"
         ><span class="brand-mark"><Icon name="arrows" :size="25" /></span
         ><span>Porter<span class="brand-period">.</span></span></a
       >
@@ -400,7 +437,7 @@ onUnmounted(() => {
           >Porter<span class="brand-period">.</span></span
         >
         <div class="login-lock"><Icon name="lock" :size="25" /></div>
-        <h2>{{ t("欢迎回来") }}</h2>
+        <p class="eyebrow">{{ t(isAdmin ? "管理后台" : "用户后台") }}</p><h2>{{ t("欢迎回来") }}</h2>
         <p class="login-description">{{ t("登录以管理你的端口转发规则") }}</p>
         <form novalidate @submit.prevent="login">
           <div v-if="loginError" role="alert" class="notice error">
@@ -413,7 +450,7 @@ onUnmounted(() => {
               ref="loginInput"
               v-model="username"
               autocomplete="username"
-              :placeholder="t('请输入管理员用户名')"
+              :placeholder="t(isAdmin ? '请输入管理员用户名' : '请输入用户名')"
               required
               :disabled="loggingIn"
             />
@@ -442,7 +479,7 @@ onUnmounted(() => {
           </button>
         </form>
         <div class="login-security">
-          <Icon name="shield" :size="16" /><span>{{ t("仅限授权管理员访问") }}</span>
+          <Icon name="shield" :size="16" /><span>{{ t(isAdmin ? "仅限授权管理员访问" : "用户后台") }}</span>
         </div>
       </div>
       <span class="login-footer">{{ t("Porter · 端口转发管理") }}</span>
@@ -453,7 +490,7 @@ onUnmounted(() => {
     <a class="skip-link" href="#main-content">{{ t("跳转到主内容") }}</a>
     <header class="topbar">
       <div class="topbar-inner">
-        <a class="brand" href="/" :aria-label="t('Porter 首页')"
+        <a class="brand" :href="isAdmin ? '/admin/' : '/user/'" :aria-label="t('Porter 首页')"
           ><span class="brand-mark"><Icon name="arrows" :size="24" /></span
           ><span>Porter<span class="brand-period">.</span></span></a
         ><span class="header-divider" /><span class="topbar-section"
@@ -476,6 +513,16 @@ onUnmounted(() => {
       </div>
     </header>
     <main id="main-content" class="dashboard" tabindex="-1">
+      <nav class="app-navigation" :aria-label="t(isAdmin ? '管理后台' : '用户后台')">
+        <button class="button" :class="page === 'rules' ? 'primary' : 'secondary'" :disabled="mutationBusy" @click="page = 'rules'">{{ t('转发规则') }}</button>
+        <template v-if="isAdmin">
+          <button v-for="item in resourcePages" :key="item.value" class="button" :class="page === item.value ? 'primary' : 'secondary'" :disabled="mutationBusy" @click="page = item.value">{{ t(item.label) }}</button>
+        </template>
+        <button v-else class="button" :class="page === 'account' ? 'primary' : 'secondary'" :disabled="mutationBusy" @click="page = 'account'">{{ t('账户概览') }}</button>
+      </nav>
+      <AdminResources v-if="isAdmin && page !== 'rules'" :key="page" :page="page" :api="api" @changed="resourcesChanged" @busy="resourceBusy = $event" />
+      <AccountOverview v-if="!isAdmin && account" :account="account" />
+      <template v-if="page === 'rules'">
       <div class="page-heading">
         <div>
           <div class="eyebrow">{{ t("网络管理") }}</div>
@@ -588,6 +635,10 @@ onUnmounted(() => {
             /><kbd>/</kbd>
           </div>
           <div class="filters">
+            <select v-if="isAdmin" v-model="ownerId" :aria-label="t('按用户筛选')" :disabled="mutationBusy">
+              <option value="">{{ t('全部用户') }}</option>
+              <option v-for="owner in ownerOptions" :key="owner.id" :value="owner.id">{{ owner.username }}{{ owner.role === 'admin' ? ` (${t('管理员')})` : '' }}</option>
+            </select>
             <select v-model="protocol" :aria-label="t('按协议筛选')">
               <option value="">{{ t("全部协议") }}</option>
               <option value="tcp">TCP</option>
@@ -598,7 +649,7 @@ onUnmounted(() => {
               <option value="">{{ t("全部状态") }}</option>
               <option value="running">{{ t("运行中") }}</option>
               <option value="disabled">{{ t("已停用") }}</option>
-              <option value="error">{{ t("错误") }}</option>
+              <option value="error">{{ t("错误") }}</option><option value="quota_exceeded">{{ t("额度已用尽") }}</option>
 </select
             ><button
               class="button refresh-button"
@@ -643,10 +694,22 @@ onUnmounted(() => {
         </div>
         <template v-else-if="filteredRules.length">
           <div class="desktop-table">
-            <table>
+            <table class="rules-table" :class="isAdmin ? 'admin-rules-table' : 'user-rules-table'">
+              <colgroup>
+                <col class="column-name">
+                <col v-if="isAdmin" class="column-owner">
+                <col class="column-protocol">
+                <col class="column-listen">
+                <col class="column-direction">
+                <col class="column-target">
+                <col class="column-status">
+                <col class="column-traffic">
+                <col class="column-operations">
+              </colgroup>
               <thead>
                 <tr>
-                  <th scope="col">{{ t("规则名称") }}</th>
+                  <th scope="col" class="name-heading">{{ t("规则名称") }}</th>
+                  <th v-if="isAdmin" scope="col">{{ t("所属用户") }}</th>
                   <th scope="col">{{ t("协议") }}</th>
                   <th scope="col">{{ t("监听地址") }}</th>
                   <th scope="col" class="direction-cell" />
@@ -667,6 +730,7 @@ onUnmounted(() => {
                         :size="18" /></span
                     ><strong :title="rule.name">{{ rule.name }}</strong>
                   </td>
+                  <td v-if="isAdmin" class="owner-cell"><span :title="rule.owner?.username">{{ rule.owner?.username }}</span></td>
                   <td>
                     <span
                       class="protocol-badge"
@@ -743,6 +807,7 @@ onUnmounted(() => {
                   >{{ protocolDetails[rule.protocol].label }}</span
                 >
               </div>
+              <p v-if="isAdmin" class="owner-label">{{ t("所属用户") }}: {{ rule.owner?.username }}</p>
               <div class="mobile-route">
                 <div>
                   <span>{{ t("监听地址") }}</span
@@ -821,6 +886,7 @@ onUnmounted(() => {
         <Icon name="shield" :size="16" />
         <p>{{ t("“运行中”表示本机监听正常。停用规则会立即断开现有会话。") }}</p>
       </div>
+      </template>
     </main>
     <footer class="app-footer">
       <span>Porter<span class="brand-period">.</span></span
@@ -836,6 +902,11 @@ onUnmounted(() => {
       v-if="editorOpen"
       :rule="editingRule"
       :save="save"
+      :owner-options="isAdmin ? ownerOptions : undefined"
+      :owner-id="editorOwner"
+      :port-start="editorAccount?.user.port_start"
+      :port-end="editorAccount?.user.port_end"
+      @owner="editorOwner = $event"
       @close="editorOpen = false"
       @busy="editorBusy = $event"
     />

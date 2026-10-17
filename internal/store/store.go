@@ -23,7 +23,10 @@ var combinedMigration string
 //go:embed migrations/003_traffic.sql
 var trafficMigration string
 
-var migrations = []string{initialMigration, combinedMigration, trafficMigration}
+//go:embed migrations/004_accounts.sql
+var accountsMigration string
+
+var migrations = []string{initialMigration, combinedMigration, trafficMigration, accountsMigration}
 
 type Store struct {
 	db   *sql.DB
@@ -167,7 +170,7 @@ func (s *Store) Close() error                   { err := s.db.Close(); s.lock.Cl
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 
 func (s *Store) List(ctx context.Context) ([]model.Rule, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT r.id,r.name,r.protocol,r.listen_host,r.listen_port,r.target_host,r.target_port,r.enabled,r.revision,r.created_at,r.updated_at,r.traffic_enabled,COALESCE(t.upload_bytes,0),COALESCE(t.download_bytes,0) FROM rules r LEFT JOIN rule_traffic t ON t.rule_id=r.id ORDER BY r.created_at,r.id")
+	rows, err := s.db.QueryContext(ctx, "SELECT r.id,r.name,r.protocol,r.listen_host,r.listen_port,r.target_host,r.target_port,r.enabled,r.revision,r.created_at,r.updated_at,r.traffic_enabled,COALESCE(t.upload_bytes,0),COALESCE(t.download_bytes,0),r.owner_id FROM rules r LEFT JOIN rule_traffic t ON t.rule_id=r.id ORDER BY r.created_at,r.id")
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +179,7 @@ func (s *Store) List(ctx context.Context) ([]model.Rule, error) {
 	for rows.Next() {
 		var r model.Rule
 		var created, updated string
-		if err = rows.Scan(&r.ID, &r.Name, &r.Protocol, &r.ListenHost, &r.ListenPort, &r.TargetHost, &r.TargetPort, &r.Enabled, &r.Revision, &created, &updated, &r.TrafficEnabled, &r.Traffic.UploadBytes, &r.Traffic.DownloadBytes); err != nil {
+		if err = rows.Scan(&r.ID, &r.Name, &r.Protocol, &r.ListenHost, &r.ListenPort, &r.TargetHost, &r.TargetPort, &r.Enabled, &r.Revision, &created, &updated, &r.TrafficEnabled, &r.Traffic.UploadBytes, &r.Traffic.DownloadBytes, &r.OwnerID); err != nil {
 			return nil, err
 		}
 		if r.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
@@ -196,10 +199,13 @@ func (s *Store) Save(ctx context.Context, r model.Rule, create bool) error {
 		return err
 	}
 	defer tx.Rollback()
-	args := []any{r.Name, r.Protocol, r.ListenHost, r.ListenPort, r.TargetHost, r.TargetPort, r.Enabled, r.TrafficEnabled, r.Revision, r.CreatedAt.Format(time.RFC3339Nano), r.UpdatedAt.Format(time.RFC3339Nano), r.ID}
-	query := "UPDATE rules SET name=?,protocol=?,listen_host=?,listen_port=?,target_host=?,target_port=?,enabled=?,traffic_enabled=?,revision=?,created_at=?,updated_at=? WHERE id=?"
+	if r.OwnerID == "" {
+		r.OwnerID = model.AdminID
+	}
+	args := []any{r.OwnerID, r.Name, r.Protocol, r.ListenHost, r.ListenPort, r.TargetHost, r.TargetPort, r.Enabled, r.TrafficEnabled, r.Revision, r.CreatedAt.Format(time.RFC3339Nano), r.UpdatedAt.Format(time.RFC3339Nano), r.ID}
+	query := "UPDATE rules SET owner_id=?,name=?,protocol=?,listen_host=?,listen_port=?,target_host=?,target_port=?,enabled=?,traffic_enabled=?,revision=?,created_at=?,updated_at=? WHERE id=?"
 	if create {
-		query = "INSERT INTO rules (name,protocol,listen_host,listen_port,target_host,target_port,enabled,traffic_enabled,revision,created_at,updated_at,id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+		query = "INSERT INTO rules (owner_id,name,protocol,listen_host,listen_port,target_host,target_port,enabled,traffic_enabled,revision,created_at,updated_at,id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
 	}
 	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {

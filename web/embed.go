@@ -24,6 +24,29 @@ func Handler() http.Handler {
 			http.Error(w, "不支持的请求方法", http.StatusMethodNotAllowed)
 			return
 		}
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/admin/", http.StatusFound)
+			return
+		}
+		if r.URL.Path == "/admin" || r.URL.Path == "/user" {
+			http.Redirect(w, r, r.URL.Path+"/", http.StatusMovedPermanently)
+			return
+		}
+		// 仅明确的前端页面可映射首页，接口和不存在的静态资源保持 404。
+		page := ""
+		switch strings.TrimSuffix(r.URL.Path, "/") {
+		case "/admin", "/admin/login", "/admin/rules", "/admin/plans", "/admin/users", "/admin/settings":
+			page = "/admin/"
+		case "/user", "/user/login", "/user/rules", "/user/account":
+			page = "/user/"
+		}
+		if page != "" {
+			r = r.Clone(r.Context())
+			r.URL.Path = page
+		} else if !strings.HasPrefix(r.URL.Path, "/assets/") && r.URL.Path != "/favicon.svg" {
+			http.NotFound(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {

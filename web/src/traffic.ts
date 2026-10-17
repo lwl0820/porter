@@ -22,3 +22,14 @@ export function formatSpeed(value: number): string {
   }
   return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}/s`;
 }
+
+// 十进制 GiB 直接换算成整数字节，拒绝无法用整数字节表示的输入。
+export function gibToBytes(value: string): string | undefined {
+  if (!/^(0|[1-9][0-9]*)(\.[0-9]{1,30})?$/.test(value)) return undefined;
+  const [whole = "0", fraction = ""] = value.split(".");
+  const scale = 10n ** BigInt(fraction.length);
+  const numerator = (BigInt(whole) * scale + BigInt(fraction || "0")) * 1073741824n;
+  if (numerator % scale !== 0n) return undefined;
+  const bytes = numerator / scale;
+  return bytes > 0n && bytes <= 9223372036854775807n ? String(bytes) : undefined;
+}

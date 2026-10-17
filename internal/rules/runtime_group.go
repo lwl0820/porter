@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/lwl0820/porter/internal/forward"
 	"github.com/lwl0820/porter/internal/model"
 )
 
@@ -67,7 +68,11 @@ func (s *Service) prepareGroup(r model.Rule, reusable *runtimeGroup) (*runtimeGr
 			g.members[transport] = reusable.members[transport]
 			continue
 		}
-		rt, err := s.engine.PrepareTraffic(physicalRule(r, transport), s.traffic[r.ID])
+		var meter forward.Meter
+		if m := s.meters[r.OwnerID]; m != nil {
+			meter = m
+		}
+		rt, err := s.engine.PrepareMeter(physicalRule(r, transport), s.traffic[r.ID], meter)
 		if err != nil {
 			for _, pending := range added {
 				pending.Stop()

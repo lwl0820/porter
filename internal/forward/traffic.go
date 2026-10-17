@@ -1,6 +1,7 @@
 package forward
 
 import (
+	"context"
 	"io"
 	"math"
 	"sync"
@@ -106,12 +107,22 @@ func (t *Traffic) RollbackReset(old trafficState) {
 
 type trafficWriter struct {
 	writer  io.Writer
+	ctx     context.Context
+	meter   Meter
 	traffic *Traffic
 	upload  bool
 }
 
 func (w trafficWriter) Write(p []byte) (int, error) {
+	if w.meter != nil {
+		if err := w.meter.Wait(w.ctx); err != nil {
+			return 0, err
+		}
+	}
 	n, err := w.writer.Write(p)
+	if w.meter != nil {
+		w.meter.Add(w.upload, n)
+	}
 	w.traffic.Add(w.upload, n)
 	return n, err
 }

@@ -2,13 +2,15 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-Porter is a self-hosted web panel for TCP and UDP port forwarding on one Linux server. Manage forwarding rules from a Chinese-language interface, with SQLite persistence and a single-container deployment.
+Porter is a self-hosted web panel for TCP and UDP port forwarding on one Linux server. Manage forwarding rules from a Chinese/English interface, with SQLite persistence and a single-container deployment.
 
 - Create, inspect, edit, delete, enable, disable, and retry TCP, UDP, or combined TCP+UDP rules.
 - Filter by protocol or state, and search names and addresses.
 - Listen on explicit IPv4 or IPv6 addresses; forward to IP addresses or hostnames.
 - Restore enabled rules after restart, without letting one occupied port block the others.
-- Configure the administrator through environment variables; no registration or external database.
+- Separate administrator and user portals; inspect rule owners, filter by user, and administer every user’s rules.
+- Create plans and users, allocate exclusive contiguous ports, and enforce four accounting modes with three UTC reset schedules.
+- Configure the administrator through environment variables; ordinary users are created by the administrator, without self-registration or an external database.
 
 Porter uses ordinary proxy connections. The destination sees the forwarding server's address. It does not preserve the client's source IP or manage host firewalls and cloud security groups. A running rule means its local listener is ready, not that its destination is reachable. Editing forwarding parameters, disabling or deleting a rule ends its active sessions; renaming alone preserves them. Restarting or upgrading interrupts all sessions.
 
@@ -32,6 +34,7 @@ services:
       PORTER_ADMIN_USERNAME: admin
       PORTER_ADMIN_PASSWORD: ${PORTER_ADMIN_PASSWORD:?Set PORTER_ADMIN_PASSWORD first}
       PORTER_HTTP_ADDR: "0.0.0.0:8080"
+      PORTER_TRAFFIC_FLUSH_INTERVAL: "5s"
     volumes:
       - porter-data:/data
 
@@ -51,7 +54,7 @@ docker compose up -d
 docker compose logs -f porter
 ```
 
-Open `http://SERVER_IP:8080` on your trusted management network and sign in as `admin` using your configured password. Change the username directly in `compose.yaml`. To use Web port 18080, change `PORTER_HTTP_ADDR` to `"0.0.0.0:18080"`, then access `http://SERVER_IP:18080`. Host networking uses the configured port directly and needs no `ports` mapping.
+Open `http://SERVER_IP:8080/admin/` on your trusted management network and sign in as `admin` using your configured password. Ordinary users use `http://SERVER_IP:8080/user/`; the root URL redirects to the admin portal. Change the username directly in `compose.yaml`. To use Web port 18080, change `PORTER_HTTP_ADDR` to `"0.0.0.0:18080"`, then access `http://SERVER_IP:18080`. Host networking uses the configured port directly and needs no `ports` mapping.
 
 Allow the management port only from your management network. For management over the internet, use an external HTTPS reverse proxy, bind `PORTER_HTTP_ADDR` to its trusted backend interface, and set `PORTER_COOKIE_SECURE: "true"`. The reverse proxy must preserve the browser-facing `Host` header: Porter compares the request's Origin with Host and does not trust forwarded headers. Business TCP/UDP traffic is encrypted only when its own protocol provides encryption. Allow required forwarding ports in the server firewall and any cloud security group yourself.
 
@@ -74,12 +77,38 @@ To customize any other variable, add it under the service's `environment` in `co
 | `PORTER_MAX_SESSIONS_PER_RULE` | `1024` | TCP connection and UDP session limit combined for each logical rule; integer from 1 to 1000000. TCP+UDP shares this allowance across both protocols. |
 | `PORTER_UDP_IDLE_TIMEOUT` | `60s` | UDP session idle timeout; Go duration from `1ms` to `24h`, for example `500ms`, `60s`, or `2m`. |
 | `PORTER_DIAL_TIMEOUT` | `5s` | Upstream connection timeout; Go duration from `1ms` to `24h`, for example `500ms`, `5s`, or `1m`. |
+| `PORTER_TRAFFIC_FLUSH_INTERVAL` | `5s` | Persistence interval for user quota usage and per-rule display counters; Go duration from `1ms` to `24h`, such as `1s` or `30s`. Shorter intervals increase disk writes; longer intervals increase possible unpersisted usage loss after an abnormal exit. Independent of live quota enforcement, UTC reset boundaries, and page polling. |
 
 Rules accept individual ports from 1 to 65535. TCP and UDP can share the same numeric port. Listen addresses must be local IP addresses; enter IPv6 addresses such as `::` without brackets in rule forms. Destinations accept an IP or hostname separately from the port. Hostnames resolve for each new TCP connection or UDP session, not each datagram. UDP has no connection handshake and does not try another resolved address just because a destination does not respond; use an explicitly reachable IP if only some of a hostname's addresses are reachable. Invalid fields, occupied listeners, and management-port conflicts are reported by the panel. For changes between overlapping listeners, disable the rule before changing its listen address.
 
 Choose **TCP+UDP** to manage both protocols as one rule with one name, revision, enabled state, listen IP/port, and destination host/port. Both protocols use the same numeric destination port; the destination must provide the intended TCP and UDP services there. The rule counts once and shares its session allowance across TCP connections and UDP sessions. Enable, disable, retry, edit, and delete affect both protocols together. A conflict on either listen port fails the entire operation and preserves the existing configuration and sessions. A combined rule is running only while both listeners are ready; if one fails, the other is stopped and the whole rule reports an error. TCP and UDP filters include combined rules, while the TCP+UDP filter shows only combined rules. Existing separate TCP and UDP rules remain separate and are not automatically merged.
 
-Logs go to standard output. `/healthz` reports process and database readiness. The SQLite database stores rule configuration; administrator passwords and login sessions are not persisted in it. Browser login sessions expire after 12 hours or a process restart.
+Logs go to standard output. `/healthz` reports process and database readiness. SQLite stores users, plans, port allocations, rules, and traffic counters. Ordinary-user passwords are stored only as salted password derivations; administrator passwords and login sessions are not persisted. Browser login sessions expire after 12 hours or a process restart.
+
+## Users, plans, and separate portals
+
+The admin portal `/admin/` and user portal `/user/` share one server while keeping their entry points, login flows, navigation, cookies, and CSRF state separate. Both can be signed in within one browser; signing out of one does not sign out of the other. Administrators see all rule owners, filter by user, and directly create, edit, enable, disable, delete, retry, and reset display counters for any user’s rules. Ordinary users can access only their own resources.
+
+Configure a user port pool, create a plan with a port count and traffic allowance in GiB, then create a user with that plan. A user receives an exclusive contiguous numeric port segment, shared across TCP, UDP, and listen IPs; destination ports remain unrestricted. Allocation excludes management and existing administrator rule ports. Insufficient contiguous space fails the entire user creation. Changing the pool affects only later allocations. Administrator-owned rules have no plan quota but cannot occupy already assigned user ports; administrator actions on user-owned rules respect the owner’s port and quota limits.
+
+Quota accounting is always active and independent of optional rule display statistics. Disabling or resetting display counters, editing a rule, or deleting it does not refund quota usage. Let U and D be successful upstream and downstream payload bytes aggregated across all of the user’s rules in the current cycle:
+
+| Accounting mode | Charged usage |
+| --- | --- |
+| Bidirectional | U + D |
+| Single direction | max(U, D) |
+| Upload only | U |
+| Download only | D |
+
+Single-direction accounting takes the maximum after aggregation, not the sum of per-rule maxima. Exhaustion actively stops all of that user’s listeners and sessions without waiting for polling or persistence; other users keep forwarding. Writes already in flight can cause a small overrun. The next cycle resumes rules still configured as enabled; manually disabled or deleted rules stay stopped.
+
+Plans reset on the first of each calendar month, monthly on the account’s UTC opening date, or on a fixed day 1–31. All boundaries use **00:00 UTC**. Missing dates use the month’s last day without moving the original anchor in later months. New users receive the full allowance until their next reset; unused allowance does not roll over. Restarting after missed cycles enters the current cycle without granting multiple allowances. The user overview shows the plan, allocated ports, cycle usage, allowance, and next UTC reset time.
+
+API namespaces are `/api/admin/*` and `/api/user/*`, each with separate `auth/login`, `auth/session`, and `auth/logout`. Rule endpoints are `/api/admin/rules` (optional `owner_id` filter) and `/api/user/rules`. The old shared `/api/auth/*` and `/api/rules*` routes no longer serve business requests; update scripts when upgrading. Existing environment-configured administrator credentials and rules are preserved.
+
+Quota and display counters are persisted every five seconds by default, configurable through `PORTER_TRAFFIC_FLUSH_INTERVAL`, with a final save on normal shutdown. An abnormal exit can lose unpersisted increments; sustained storage failures enlarge this window. Rule display statistics can be enabled and reset independently without affecting plan usage.
+
+This release supports creating and viewing users and plans, without editing/deleting them, switching plans, password resets, self-registration, or payments.
 
 ## Build from source
 
@@ -123,7 +152,7 @@ For a release archive, use `./porter` instead. Download `SHA256SUMS` alongside t
 
 Pin a version tag such as `v1.0.0` for repeatable deployments once that release exists. Before upgrading, stop Porter and back up the **entire data volume**, including SQLite journal files. Do not copy a live database file in isolation or share its directory between replicas.
 
-TCP+UDP support upgrades the SQLite schema from version 1 to version 2 on startup, preserving existing rule IDs, revisions, timestamps, configuration, and enabled states. Older Porter programs reject a version 2 database. To downgrade, restore the complete backup taken before upgrading together with the older program; do not open the migrated database with an older binary.
+On startup, older SQLite databases migrate through schema version 4: version 2 adds TCP+UDP, version 3 adds display statistics, and version 4 adds users, plans, port allocations, and current-cycle quota usage. Existing rules retain their IDs, revisions, timestamps, configuration, enabled states, and display counters, and are assigned to the environment-configured administrator. Older programs reject databases newer than their supported schema. To downgrade, restore the complete pre-upgrade backup together with the older program; do not open a migrated database with an older binary.
 
 Find your Compose volume name with `docker volume ls` (usually `<project>_porter-data`). For example, replace `YOUR_PORTER_VOLUME` below with that name:
 

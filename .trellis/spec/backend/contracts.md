@@ -12,16 +12,16 @@
 - `model.Transports(protocol) []string`：`tcp`、`udp` 映射单个传输，`tcp+udp` 映射两个传输，未知值返回 nil；冲突使用传输集合交集。
 - `forward.Engine.Prepare(model.Rule) (*Runtime, error)`：只接收物理 TCP 或 UDP 配置，绑定端口但不转发；`Start()`、`Update(rule)`、`Stop()`、`Error()` 分离准备与生效。`Failed() <-chan struct{}` 只通知不可恢复监听故障，正常 Stop 和目标不可达不触发。
 - `rules.runtimeGroup`：每个逻辑规则关联一个运行组，以协议为键持有物理 Runtime；Service 串行控制组的准备、替换、监控和停止。
-- SQL 迁移放在 `internal/store/migrations/` 并内嵌，以 `PRAGMA user_version` 管理。保留 `001_init.sql`；`002_tcp_udp.sql` 将协议 CHECK 扩展为三个值；`003_traffic.sql` 增加默认关闭的统计开关和累计表，当前版本为 3。v1→v2 事务复制全部字段并保留自定义索引和触发器；未知列、外部外键依赖或迁移失败须拒绝并回滚，不能静默丢弃。v2→v3 增量 ALTER，不重建 rules 表。
+- SQL 迁移放在 `internal/store/migrations/` 并内嵌，以 `PRAGMA user_version` 管理。保留 `001_init.sql`；`002_tcp_udp.sql` 将协议 CHECK 扩展为三个值；`003_traffic.sql` 增加默认关闭的统计开关和累计表，当前版本为 4，`004_accounts.sql` 增加用户、套餐、系统端口池、用户独占端口及当前周期用量，规则增加 owner_id。v1→v2 事务复制全部字段并保留自定义索引和触发器；未知列、外部外键依赖或迁移失败须拒绝并回滚，不能静默丢弃。v2→v3 增量 ALTER，不重建 rules 表。
 - `.github/workflows/ci.yml`：PR 与 `workflow_call` 验证入口；`release.yml`：main push 和 v* tag push 的验证及发布入口。同一次 main 推送只执行一套验证。
 
 ## 3. 请求、响应与环境契约
 
-规则输入只包含 `name/protocol/listen_host/listen_port/target_host/target_port/enabled/traffic_enabled?`，不得让客户端设置 id、revision、时间或统计快照。返回 Rule 包含这些配置及 `id/revision/created_at/updated_at/status/last_error_code?/last_error?/traffic`，统计契约见下方场景。
+规则输入只包含 `name/protocol/listen_host/listen_port/target_host/target_port/enabled/traffic_enabled?`，不得让客户端设置 id、revision、时间或统计快照。返回 Rule 包含这些配置及 `id/revision/created_at/updated_at/status/last_error_code?/last_error?/traffic/owner_id`，管理端另含权威 `owner:{id,username,role}`，统计契约见下方场景。
 
 `protocol` 只接受 `tcp`、`udp`、`tcp+udp`。组合规则使用一条记录、一个 id/revision、同一监听 IP/数字端口及同一目标主机/数字端口；启停、重试和删除整体执行。现有两条单协议规则不自动合并。组合内两个 Runtime 按同一非空 Rule.ID 共享单规则会话预算；预备实例也持有预算引用，最后实例停止且会话释放后才回收预算。
 
-`GET /api/rules` 返回 `{rules: Rule[]}`；新增返回 201，修改返回 200，删除完成后返回 204。更新、删除和重试携带 `If-Match: "<revision>"`。登录与当前会话返回 `{username, csrf_token}`，其余修改类请求携带 `X-CSRF-Token` 和同源 Origin。
+`GET /api/admin/rules` 和 `/api/user/rules` 返回 `{rules: Rule[]}`；管理端支持 `owner_id` 查询。新增返回 201，修改返回 200，删除完成后返回 204。更新、删除和重试携带 `If-Match: "<revision>"`。两端分别使用自己的 `auth/login|session|logout`，响应包含 `{user_id, username, role, csrf_token}`，其余修改请求携带本端 `X-CSRF-Token` 和同源 Origin。旧共享 `/api/auth/*`、`/api/rules*` 业务路由返回 404，不能作为兼容别名。
 
 管理员环境变量 `PORTER_ADMIN_USERNAME`、`PORTER_ADMIN_PASSWORD` 必填；`PORTER_HTTP_ADDR` 默认 `0.0.0.0:8080`，`PORTER_DB_PATH` 默认 `/data/porter.db`。管理监听按 IPv4/IPv6 显式选择 tcp4/tcp6；转发监听同样固定地址族，不能依赖系统双栈默认值。
 
@@ -101,7 +101,7 @@
 - `rules.Service.ResetTraffic(ctx, id, revision) (model.Rule, error)`：服务锁内协调重置和版本校验。
 - `Repository.SaveTraffic(ctx, map[string]model.Traffic) error`：批量提交累计量；`ResetTraffic(ctx, model.Rule) error`：同一事务清零并更新 revision。
 - `rules.Service.Close() error` 幂等，停止采样、等待转发退出后最终保存，返回保存错误；main 需报告，数据库必须后关闭。
-- `POST /api/rules/{id}/traffic/reset`：受 protect、Origin、CSRF、If-Match 保护，成功 200 返回最新 Rule 与 ETag。
+- `POST /api/admin/rules/{id}/traffic/reset` 和 `/api/user/rules/{id}/traffic/reset`：受 protect、Origin、CSRF、If-Match 保护，成功 200 返回最新 Rule 与 ETag。
 
 ### 8.3 请求、响应与存储契约
 
@@ -109,7 +109,7 @@
 
 流量只计成功写出的应用载荷，上行为客户端到目标，下行为目标到客户端；部分写入按实际 n，丢包/失败部分不计数。TCP 持续连接每次成功写出即累计，不等 io.Copy 结束。数据路径不持有服务锁、不访问数据库；改变统计开关或重置不换代、不主动断开连接。
 
-后台每秒采样，每 5 秒批量保存变化的累计值；GET 不推进采样基线。统计关闭、规则停用或监听失败时输出速度为零，累计量保留。改名、目标、监听或协议修改沿用规则 ID 累计，删除时通过外键级联清理 rule_traffic。
+后台每秒采样，默认每 5 秒批量保存变化的累计值，保存间隔由 `PORTER_TRAFFIC_FLUSH_INTERVAL` 控制（默认 `5s`，Go duration，`1ms`–`24h`）；GET 不推进采样基线。统计关闭、规则停用或监听失败时输出速度为零，累计量保留。改名、目标、监听或协议修改沿用规则 ID 累计，删除时通过外键级联清理 rule_traffic。
 
 重置临时切分统计代，事务期间新流量进入新代；提交失败合并旧累计和期间增量，成功保留新代并重建采样基线。重置成功增加 revision 与 updated_at，周期保存不变更 revision；服务锁串行化批量保存、重置和删除，禁止旧快照覆盖清零或复活删除数据。
 
@@ -141,3 +141,71 @@
 错误：用 io.Copy 最终返回量统计长连接；在 GET 时计算并更新速度；重置内存后忽略持久化错误。
 
 正确：每次成功 Write 后累计，独立后台采样；重置事务失败恢复旧统计并合并并发增量，旧周期快照无法回写。
+
+
+## 9. 场景：双端多用户、端口分配及套餐配额
+
+### 9.1 范围与触发条件
+
+修改认证、账号/套餐、端口分配、规则归属、配额数据路径、周期或保存配置时适用。本场景的用户配额与第 8 节可关闭、可清零的规则展示统计是两个独立账本。
+
+### 9.2 签名与职责
+
+- model.User、Plan、Settings、Usage、Account 定义跨层资源；Rule.OwnerID 是服务端归属，AdminRuleCreateInput 才允许管理员创建时指定 owner_id，更新不转移归属。
+- Store.EnsureAdmin(ctx,username) 维护固定 system-admin 身份；CreateUser(ctx,user,usage,managementPort) 同事务创建账号、连续端口分配和当前周期。
+- auth.Manager.SetUsers 注入普通用户凭据查询；LoginPortal、GetPortal、LogoutPortal 同时约束端和角色，HashPassword/VerifyPassword 使用带盐 PBKDF2-SHA256 编码，普通用户派生结果不得输出。
+- rules.Options{FlushInterval,Now} 注入保存间隔与可控时钟；SaveFor、DeleteFor、RetryFor、ResetTrafficFor 先授权再校验规则版本，ListFor 管理端可指定归属筛选。
+- rules.userMeter 为每用户跨规则、协议和连接的共享计量；forward.Meter.Wait(ctx)/Add(upload,n) 在成功写出点执行，独立协调过程停止用户运行组，数据协程不得同步 Stop 自身。
+- quota.Cycle(plan,user,now) 使用 UTC 和原始日号计算周期；Used(mode,U,D) 实现四种计费，SaturatingAdd 保护整数字节上限。
+
+### 9.3 数据、HTTP 与环境契约
+
+管理页面 /admin/，用户页面 /user/，根地址跳转管理端；独立 /api/admin/* 和 /api/user/*，共用同一进程、SQLite 与底层服务。
+
+Cookie 为 porter_admin_session（Path=/api/admin）和 porter_user_session（Path=/api/user），CSRF、登录和退出独立。服务端校验会话所属端及角色，复制 Cookie 到另一端同样无效。双端同时登录不覆盖，登出一端不撤销另一端；全局登录限流共用。
+
+管理端 rules 默认全部，owner_id 按稳定 ID 过滤，响应 owner 来自用户表，包含管理员自己。管理员无需用户会话即可完成任意规则操作，但遵守所属用户端口和额度；用户端强制本人，不能通过归属参数筛选他人或指定他人 owner。
+
+管理 plans、users 提供 GET 和 POST，settings 提供 GET 和携带 If-Match 的 PUT；用户 account 提供 GET。列表分别为 {plans:Plan[]}、{users:Account[]}，Account 为 {user,plan,usage}。尚未配置的 Settings 两个端口为 0、revision 为 1；更新必须为有效起止范围。
+
+套餐字段包括 name、port_count、traffic_limit_bytes（正整数字节字符串）、accounting_mode=both|max|upload|download、reset_mode=calendar_month|anniversary|fixed_day，以及仅 fixed_day 可设置的 reset_day=1–31。用户创建只接受 username/password/plan_id；密码不回传。
+
+用户创建由服务操作锁和数据库唯一性共同保护，分配连续数字段，排除所有已有分配、管理员规则端口及管理端口；TCP/UDP 不重复计数，不同 IP 也不能跨用户复用数字。修改池只影响后续用户，不能回收存量分配。管理监听配置与已有分配冲突时拒绝启动。
+
+用户周期持久化独立的 U、D，按成功转发的应用载荷计量。both=U+D，max=max(U,D)，upload=U，download=D，先按全用户汇总再计算。显示关闭、清零、改删规则均不退款。字节响应为十进制字符串，含 cycle_start/end、upload/download/used/limit_bytes 和 exceeded；不得经浮点转换。
+
+周期统一 UTC 00:00；缺失日期取月末且保留原始日号，首次开户完整额度，未用不结转，停机跨周期只进入当前周期。周期推进先提交新周期，再放行新额度，不清零展示账本；活动连接不因正常清零强制断开。周期键入库统一为 UTC 固定九位纳秒文本再比较，不能用 SQLite julianday 的毫秒精度替代，以免误判重置点前一纳秒的首周期。
+
+额度耗尽立即标记并通知独立协调者，停止全部所属监听和已有会话，不依赖 GET、页面轮询或保存时钟。enabled 表示配置意图，quota_exceeded 是运行状态；手动停用及删除不能被周期恢复复活。并发在途写入允许小量超额，不能声称逐字节限速器。
+
+PORTER_TRAFFIC_FLUSH_INTERVAL 默认 5s，Go duration 范围 1ms–24h，空值使用默认、非法值拒绝启动；它控制两个账本保存，不改变每秒采样、实时断流、UTC 边界或前端五秒刷新。正常退出停止转发后最终保存。强制退出可丢未保存增量，连续存储失败扩大丢失窗口，必须日志报告并保留内存重试。
+
+### 9.4 校验与错误矩阵
+
+| 条件 | 行为 |
+| --- | --- |
+| 本端无有效会话、另一端 token 或角色不符 | 拒绝接口访问，不执行管理操作。 |
+| 普通用户访问他人规则 | 404，先授权后验证 revision，避免泄露他人版本。 |
+| 普通用户输入 owner_id、更新转移归属、非法枚举或固定日组合 | 400，状态不变。 |
+| 重名、无足够连续端口、管理员侵占已分配端口 | 409，创建用户事务整体回滚。 |
+| 监听端口超出所属范围 | 字段校验失败，管理端代操作同样拒绝。 |
+| 耗尽时启用、重试或保存启用规则 | 409 quota_exceeded；停用、删除及展示清零仍可用。 |
+| 周期重置事务失败 | 不发放新额度，暂缓该用户新写入并重试，其他用户独立。启动时单用户重置失败同样隔离，规则显示 error + quota_reset_pending，提交成功后自动恢复仍启用的这类规则；真正 listen_failed 不自动复活。 |
+| 定时用量保存失败 | 不推进保存成功基线，保持内存计数并重试；正常退出最终失败向上返回。 |
+| 旧周期快照或重复周期转换 | 版本/周期键校验，不覆盖当前周期或重复清零。 |
+
+### 9.5 正常、基础与异常案例
+
+- 正常：管理端查看用户归属并按用户过滤，代操作后用户端刷新获得新 revision；本人规则不泄露其他账号。
+- 基础：开户 31 日遇平年二月按 28 日 UTC 零点重置，三月回到 31 日；10 个数字端口供用户 TCP/UDP 共用。
+- 异常：重置存储被阻塞期间的在途新周期字节不能被提交覆盖；旧周期通知不得停止已恢复的新周期运行组。
+
+### 9.6 必需测试
+
+覆盖双端 Cookie/CSRF/登出隔离及角色拒绝、管理员本人和两个用户的归属与过滤、所有代操作和越权 ID、并发端口分配与失败回滚、所有旧库迁移、四种模式（特别是两规则反向流量的全用户 max）、UTC 平闰年月末及回锚、周期事务失败和在途累计、实时主动断流与另一用户隔离、保存间隔及最终保存错误。真实 socket 与 race 检查不能由仅调用计量对象替代。
+
+### 9.7 错误与正确写法
+
+错误：用可清零的 rule_traffic 汇总用户配额；对每条规则分别取 max 再相加；handler 只按前端角色显隐控制权限；为停止转发从写入协程同步 Stop 并等待自身。
+
+正确：持久化独立用户周期 U、D，共享计量后按套餐公式计算；两端接口使用独立会话守卫且服务层执行归属和配额检查；数据路径仅标记并发出通知，由独立服务协调过程关闭整个用户的运行组。
