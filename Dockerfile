@@ -18,7 +18,7 @@ COPY --from=frontend /src/web/dist/ ./web/dist/
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /src/.tmp/porter ./cmd/porter
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -tags porter_docker -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /src/.tmp/porter ./cmd/porter
 
 FROM scratch
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt

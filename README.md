@@ -11,6 +11,7 @@ Porter is a self-hosted web panel for TCP and UDP port forwarding on one Linux s
 - Separate administrator and user portals; inspect rule owners, filter by user, and administer every user’s rules.
 - Create plans and users, allocate exclusive contiguous ports, and enforce four accounting modes with three UTC reset schedules.
 - Configure the administrator through environment variables; ordinary users are created by the administrator, without self-registration or an external database.
+- Manage rules from a bilingual interactive menu or parameter commands on native Linux installations.
 
 Porter uses ordinary proxy connections. The destination sees the forwarding server's address. It does not preserve the client's source IP or manage host firewalls and cloud security groups. A running rule means its local listener is ready, not that its destination is reachable. Editing forwarding parameters, disabling or deleting a rule ends its active sessions; renaming alone preserves them. Restarting or upgrading interrupts all sessions.
 
@@ -106,6 +107,53 @@ sudo journalctl -u porter.service -n 30 --no-pager
 
 Verify login, health and real TCP/UDP traffic. After a manual upgrade, update only the `version` field in `/etc/porter/install.json` to the actual release tag, keeping the remaining fields and mode `600`. For rollback, stop the service and restore the previous binary with its matching **complete data and configuration backup**; an older binary cannot use an upgraded database. Native backups are separate from the Docker volume backups below.
 
+### Native rule commands
+
+Use the installed binary as root or through `sudo` to manage rules with administrator privileges, without entering Web credentials. The Porter service must be running; commands connect to its local Unix socket and changes appear immediately in the Web panel. After upgrading the binary, restart the service to enable the control socket. These commands support native Linux only: Docker images disable both rule commands and the control socket at build time, and native binaries also reject rule management in detected container environments. Use the Web panel for Docker deployments.
+
+Open the interactive menu:
+
+```bash
+sudo /opt/porter/porter rules
+sudo /opt/porter/porter rules --lang en
+```
+
+Without `--lang`, **the first step is choosing 中文 or English**. Empty or invalid choices ask again; no language is selected automatically or saved between calls. Explicit `--lang zh-CN` or `--lang en` skips language selection. The menu offers create, list, details, edit, delete and exit. Select rules from the displayed list; editing can retain current values, and deletion asks for confirmation with cancellation as the default. Canceling an unfinished operation does not submit it; completed operations remain saved. Language selection and menu input use the controlling terminal (`/dev/tty`), keeping standard output and redirected standard input separate. The menu requires a terminal even with `--lang` and does not accept `--json`.
+
+For direct commands or unattended scripts, provide an action, all required arguments, and `--lang`:
+
+```bash
+sudo /opt/porter/porter rules add --lang en \
+  --name website --protocol tcp --listen-host 0.0.0.0 --listen-port 18081 \
+  --target-host example.com --target-port 80 --enabled=true --traffic-enabled=false
+sudo /opt/porter/porter rules list --lang en
+sudo /opt/porter/porter rules get RULE_ID --lang en --json
+sudo /opt/porter/porter rules update RULE_ID --lang en --enabled=false
+sudo /opt/porter/porter rules delete RULE_ID --lang en
+```
+
+Replace `RULE_ID` with the stable ID returned by create or list. Protocol values are `tcp`, `udp` and `tcp+udp`. Parameter commands never enter a wizard for missing fields. Without a controlling terminal, omitting `--lang` fails before any rule operation. **Parameter-mode `delete` takes effect immediately, without confirmation.**
+
+| Command | Arguments and behavior |
+| --- | --- |
+| `rules add` | Requires `--name`, `--protocol`, `--listen-host`, `--listen-port`, `--target-host`, `--target-port`; optional `--enabled=true\|false`, `--traffic-enabled=true\|false`, `--owner-id ID`. Defaults: enabled, display statistics off, administrator ownership. |
+| `rules list` | All rules, or filter with `--owner-id ID`. Shows stable IDs, owner IDs, status and revisions. |
+| `rules get ID` | Full rule details, including configuration, owner, revision and display statistics. |
+| `rules update ID` | Set one or more creation configuration fields; omitted fields and ownership remain unchanged. Supports `--revision N`. |
+| `rules delete ID` | Delete the specified rule and release its listeners and sessions. Supports `--revision N`. |
+
+Common options `--lang zh-CN|en`, `--socket PATH`, `--json` and `--help` can appear before or after the action; `--lang=en` is also accepted. Use `--enabled=false` or `--traffic-enabled=false` to switch a field off; boolean field options require the equals form. `--json` is for single parameter operations: results go to standard output, errors to standard error, with stable JSON field names and error codes. Byte counters remain exact decimal strings. Exit codes are `0` for success, `1` for operation failure and `2` for usage errors. For help without a running service, use `porter rules --help --lang en`; `porter --version` remains unchanged.
+
+Administrators can manage all rules. Creation with `--owner-id USER_ID` assigns an existing user; that user's allocated ports and quota still apply. Use the existing user ID from the authenticated Web admin API (`GET /api/admin/users`, `user.id` in each account). Rule updates preserve ownership. The CLI manages rules only; user, plan, port-pool, retry and counter-reset administration remains in the Web panel. Updates and deletions check revisions and fail on concurrent changes; reload before retrying. Scripts can pin a previously observed revision with `--revision N`. After a timeout, inspect the result before resubmitting a change.
+
+The installed service uses `/var/lib/porter/porter-control.sock` by default. The socket accepts only actual root peers and is not exposed on the Web port. Service startup creates it beside the database, unless `PORTER_CONTROL_SOCKET` sets another path. The CLI chooses `--socket`, then `PORTER_CONTROL_SOCKET`, then `/var/lib/porter/porter-control.sock`. The parent directory and every ancestor must belong to root or the service user, must not be writable by group or other users, and must not be symbolic links. A directory owned by another user is rejected even if currently read-only, since its owner can change its permissions. For a custom program directory, use its binary path. For a manually started service or a custom database directory, pass the matching socket explicitly:
+
+```bash
+sudo /custom/porter/porter rules list --lang en --socket /custom/data/porter-control.sock
+```
+
+A connection failure means you should check service status, the socket path and whether the upgraded service has restarted. Commands do not start a second service or edit an offline database.
+
 ### 手工 Compose 部署
 
 Use native Linux Docker Engine and Docker Compose v2. The deployment uses host networking so newly added forwarding ports need no Compose changes.
@@ -164,6 +212,7 @@ To customize any other variable, add it under the service's `environment` in `co
 | `PORTER_ADMIN_PASSWORD` | Required; no default | Administrator password. |
 | `PORTER_HTTP_ADDR` | `0.0.0.0:8080` | Explicit local IPv4/IPv6 address and port 1–65535, such as `127.0.0.1:8080` or `[::1]:8080`; hostnames are not accepted. |
 | `PORTER_DB_PATH` | `/data/porter.db` | SQLite file path; persist its entire directory. |
+| `PORTER_CONTROL_SOCKET` | `porter-control.sock` beside the database | Native Linux service control socket path; the CLI defaults to `/var/lib/porter/porter-control.sock` unless this variable or `--socket` is set. Ignored by Docker builds, which disable local rule management. |
 | `PORTER_COOKIE_SECURE` | `false` | Boolean; set to `true` when the browser accesses the panel over HTTPS so login cookies are sent only over HTTPS. |
 | `PORTER_MAX_SESSIONS` | `4096` | Global TCP connection and UDP session limit combined; integer from 1 to 1000000. |
 | `PORTER_MAX_SESSIONS_PER_RULE` | `1024` | TCP connection and UDP session limit combined for each logical rule; integer from 1 to 1000000. TCP+UDP shares this allowance across both protocols. |

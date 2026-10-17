@@ -107,6 +107,53 @@ sudo journalctl -u porter.service -n 30 --no-pager
 
 重启后验证登录、健康端点及实际 TCP/UDP 收发。显式升级后如继续使用安装器，请将 `/etc/porter/install.json` 的 `version` 同步为实际版本标签，保留其余字段和 `600` 权限。回退时先停服务，同时恢复原程序与匹配的**完整数据及配置备份**；旧程序不能直接使用已升级的数据库。上述原生操作与下方 Docker 卷备份相互独立。
 
+### 原生命令行规则管理
+
+使用已安装的程序，以 root 或 `sudo` 身份获得管理员规则权限，无须输入 Web 管理员账号密码。Porter 服务必须正在运行；命令通过本机 Unix 套接字访问服务，操作即时生效并同步到 Web 后台。升级程序后需重启服务以启用控制套接字。此功能仅支持原生 Linux：Docker 镜像在构建时禁用规则命令和本机控制入口，原生程序在识别到容器环境时也会拒绝规则管理。Docker 部署请使用 Web 后台。
+
+进入交互菜单：
+
+```bash
+sudo /opt/porter/porter rules
+sudo /opt/porter/porter rules --lang zh-CN
+```
+
+未指定 `--lang` 时，**第一步选择中文或 English**。空白或无效选择会重新提示，不默认选择，也不保存上次选择。指定 `--lang zh-CN` 或 `--lang en` 可跳过语言选择。菜单提供创建、列表、详情、修改、删除及退出；从当前列表选择规则，修改时可保留当前值，删除需确认且默认取消。取消未完成操作不会提交，已完成操作继续保留。语言选择和菜单输入使用控制终端（`/dev/tty`），不混入标准输出，也不消费重定向的标准输入。交互菜单即使指定语言仍需要终端，不接受 `--json`。
+
+直接参数调用及无人值守脚本应提供动作、完整必填参数及 `--lang`：
+
+```bash
+sudo /opt/porter/porter rules add --lang zh-CN \
+  --name 网站转发 --protocol tcp --listen-host 0.0.0.0 --listen-port 18081 \
+  --target-host example.com --target-port 80 --enabled=true --traffic-enabled=false
+sudo /opt/porter/porter rules list --lang zh-CN
+sudo /opt/porter/porter rules get 规则ID --lang zh-CN --json
+sudo /opt/porter/porter rules update 规则ID --lang zh-CN --enabled=false
+sudo /opt/porter/porter rules delete 规则ID --lang zh-CN
+```
+
+将 `规则ID` 替换为创建或列表返回的稳定 ID。协议值为 `tcp`、`udp`、`tcp+udp`。参数命令缺少字段会直接报错，不进入向导补问；无控制终端且未指定 `--lang` 时，在执行规则操作前退出。**参数方式的 `delete` 立即删除，没有二次确认。**
+
+| 命令 | 参数及行为 |
+| --- | --- |
+| `rules add` | 必填 `--name`、`--protocol`、`--listen-host`、`--listen-port`、`--target-host`、`--target-port`；可选 `--enabled=true\|false`、`--traffic-enabled=true\|false`、`--owner-id ID`。默认启用、展示统计关闭、归属管理员。 |
+| `rules list` | 默认全部规则，可用 `--owner-id ID` 筛选；显示稳定 ID、归属 ID、状态及版本。 |
+| `rules get ID` | 完整规则详情，包括配置、归属、版本及展示统计。 |
+| `rules update ID` | 至少指定一个创建时的配置字段，未传字段及归属保留；支持 `--revision N`。 |
+| `rules delete ID` | 删除指定规则并释放监听和会话；支持 `--revision N`。 |
+
+通用参数 `--lang zh-CN|en`、`--socket PATH`、`--json`、`--help` 可放在动作前后，语言也支持 `--lang=en`。布尔字段必须使用等号形式，如 `--enabled=false`、`--traffic-enabled=false`。`--json` 只用于单次参数操作：结果写标准输出，错误写标准错误，JSON 字段名及错误码保持稳定，字节计数为精确的十进制字符串。成功退出码为 `0`，操作失败为 `1`，用法错误为 `2`。帮助无须服务运行：`porter rules --help --lang zh-CN`；`porter --version` 用法不变。
+
+管理员可管理所有归属的规则。创建时通过 `--owner-id 用户ID` 指定已有用户，仍须遵守该用户的分配端口及流量额度；已有用户 ID 可从已登录的 Web 管理 API 获取（`GET /api/admin/users` 返回的账号中取 `user.id`）。修改不转移归属。命令行仅管理规则，用户、套餐、端口池、重试及统计清零继续通过 Web 后台处理。修改和删除执行版本检查，并发变更时失败，须重新查询后再操作；脚本可用 `--revision N` 固定先前读取的版本。请求超时后应先查询结果，再决定是否重新提交。
+
+原生安装服务默认使用 `/var/lib/porter/porter-control.sock`，只接受真实 root 对端，不在 Web 端口暴露入口。服务启动时在数据库目录旁创建 `porter-control.sock`，可用 `PORTER_CONTROL_SOCKET` 覆盖；CLI 路径优先级为 `--socket`、`PORTER_CONTROL_SOCKET`、`/var/lib/porter/porter-control.sock`。父目录及全部祖先目录必须归属 root 或服务用户，不能对组或其他用户开放写权限，也不能是符号链接。其他用户拥有的目录即使当前只读也会被拒绝，因为其所有者仍能修改权限。自定义安装目录时使用对应程序路径；手动启动服务或使用自定义数据库目录时，显式指定匹配的控制路径：
+
+```bash
+sudo /custom/porter/porter rules list --lang zh-CN --socket /custom/data/porter-control.sock
+```
+
+连接失败时，检查服务状态、控制路径和升级后是否已重启。命令不会另起服务或离线修改数据库。
+
 ### 手工 Compose 部署
 
 使用原生 Linux Docker Engine 和 Docker Compose v2。部署采用 host 网络，新增转发端口不需要修改 Compose。
@@ -165,6 +212,7 @@ docker compose logs -f porter
 | `PORTER_ADMIN_PASSWORD` | 必填，无默认值 | 管理员密码。 |
 | `PORTER_HTTP_ADDR` | `0.0.0.0:8080` | 显式本机 IPv4/IPv6 地址与 1–65535 端口，例如 `127.0.0.1:8080`、`[::1]:8080`；不接受域名。 |
 | `PORTER_DB_PATH` | `/data/porter.db` | SQLite 文件路径，应持久化整个目录。 |
+| `PORTER_CONTROL_SOCKET` | 数据库目录旁的 `porter-control.sock` | 原生 Linux 服务控制路径；CLI 未设置该变量或 `--socket` 时默认使用 `/var/lib/porter/porter-control.sock`。Docker 构建禁用本机规则管理，忽略此变量。 |
 | `PORTER_COOKIE_SECURE` | `false` | 布尔值；浏览器通过 HTTPS 访问时设为 `true`，使登录 Cookie 仅通过 HTTPS 发送。 |
 | `PORTER_MAX_SESSIONS` | `4096` | 全局 TCP 连接与 UDP 会话合计上限，取值为 1–1000000 的整数。 |
 | `PORTER_MAX_SESSIONS_PER_RULE` | `1024` | 单条逻辑规则的 TCP 连接与 UDP 会话合计上限，取值为 1–1000000 的整数；TCP+UDP 两协议共享额度。 |

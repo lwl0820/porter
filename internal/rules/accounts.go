@@ -172,6 +172,17 @@ func (s *Service) ListFor(actor model.User, owner string) []model.Rule {
 	})
 	return result
 }
+
+// GetFor 在与写操作相同的锁下校验权限并取得运行态详情。
+func (s *Service) GetFor(actor model.User, id string) (model.Rule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.authorize(actor, id); err != nil {
+		return model.Rule{}, err
+	}
+	return s.ruleFor(actor, s.items[id]), nil
+}
+
 func (s *Service) SaveFor(ctx context.Context, actor model.User, owner, id string, revision int64, input model.Input) (model.Rule, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

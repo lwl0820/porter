@@ -10,14 +10,17 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/lwl0820/porter/internal/auth"
+	"github.com/lwl0820/porter/internal/cli"
 	"github.com/lwl0820/porter/internal/config"
 	"github.com/lwl0820/porter/internal/forward"
 	"github.com/lwl0820/porter/internal/httpapi"
+	"github.com/lwl0820/porter/internal/localapi"
 	"github.com/lwl0820/porter/internal/rules"
 	"github.com/lwl0820/porter/internal/store"
 	"github.com/lwl0820/porter/web"
@@ -26,6 +29,15 @@ import (
 var version = "dev"
 
 func main() {
+	first := ""
+	if len(os.Args) > 1 {
+		first, _, _ = strings.Cut(os.Args[1], "=")
+	}
+	if len(os.Args) > 1 && first != "--version" && first != "-version" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		os.Exit(cli.Run(ctx, os.Args[1:], os.Stdout, os.Stderr))
+	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	if err := run(); err != nil {
 		slog.Error("Porter 运行失败", "error", err)
@@ -48,7 +60,8 @@ func run() (result error) {
 		return err
 	}
 	defer db.Close()
-	if _, err := db.EnsureAdmin(context.Background(), cfg.Username); err != nil {
+	admin, err := db.EnsureAdmin(context.Background(), cfg.Username)
+	if err != nil {
 		return err
 	}
 	host, _, _ := net.SplitHostPort(cfg.HTTPAddr)
@@ -69,6 +82,19 @@ func run() (result error) {
 		result = errors.Join(result, service.Close())
 		slog.Info("Porter 已停止")
 	}()
+	controlPath := os.Getenv("PORTER_CONTROL_SOCKET")
+	if controlPath == "" {
+		dbPath, pathErr := filepath.Abs(cfg.DBPath)
+		if pathErr != nil {
+			return pathErr
+		}
+		controlPath = filepath.Join(filepath.Dir(dbPath), "porter-control.sock")
+	}
+	control, err := localapi.Start(controlPath, service, admin)
+	if err != nil {
+		return fmt.Errorf("本机控制监听失败：%w", err)
+	}
+	defer func() { result = errors.Join(result, control.Close()) }()
 	manager := auth.New(cfg.Username, cfg.Password)
 	manager.SetUsers(db)
 	handler := httpapi.New(service, manager, db, cfg.CookieSecure, web.Handler())

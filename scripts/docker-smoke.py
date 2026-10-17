@@ -214,6 +214,26 @@ def rule_input(rule, **changes):
     return {**{key: rule[key] for key in fields}, **changes}
 
 
+def verify_native_control_disabled(name):
+    # 显式语言确保检查的是容器限制，而不是无终端时的语言选择失败。
+    result = docker(
+        "exec", name, "/porter", "rules", "list", "--lang", "en", "--json",
+        "--socket", "/data/smoke-control.sock", check=False,
+    )
+    assert result.returncode == 1, "Container rule CLI must reject native management"
+    assert result.stdout == "", "Rejected rule CLI wrote to standard output"
+    assert json.loads(result.stderr)["error"]["code"] == "native_only", result.stderr
+    # scratch 镜像没有 shell；Docker 归档接口能直接检查容器及数据卷路径。
+    for path in ("/data/porter-control.sock", "/data/smoke-control.sock"):
+        missing = subprocess.run(
+            ["docker", "cp", f"{name}:{path}", "-"], capture_output=True, timeout=10,
+        )
+        assert missing.returncode != 0 and b"Could not find the file" in missing.stderr, (
+            f"Container unexpectedly exposes a control node at {path}: "
+            + missing.stderr.decode(errors="replace")
+        )
+
+
 def main():
     image = sys.argv[1] if len(sys.argv) > 1 else "porter:local"
     name = "porter-smoke-" + uuid.uuid4().hex[:12]
@@ -229,6 +249,7 @@ def main():
             "-e", "PORTER_ADMIN_PASSWORD=smoke-only-long-password",
             "-e", f"PORTER_HTTP_ADDR=127.0.0.1:{http_port}",
             "-e", "PORTER_TRAFFIC_FLUSH_INTERVAL=100ms",
+            "-e", "PORTER_CONTROL_SOCKET=/data/smoke-control.sock",
             "-v", f"{volume}:/data", image,
         )
 
@@ -237,6 +258,7 @@ def main():
         start()
         panel = Panel(http_port)
         panel.ready()
+        verify_native_control_disabled(name)
         html = panel.request("GET", "/")
         assert "<html" in html.lower(), "Embedded frontend page was not returned"
         asset = re.search(r'src="([^\"]+\.js)"', html)
@@ -280,6 +302,7 @@ def main():
         start()
         panel = Panel(http_port)
         panel.ready()
+        verify_native_control_disabled(name)
         panel.login()
         rules = panel.request("GET", "/api/admin/rules")["rules"]
         assert len(rules) == 2 and all(
@@ -310,6 +333,7 @@ def main():
         start()
         panel = Panel(http_port)
         panel.ready()
+        verify_native_control_disabled(name)
         panel.login()
         rules = panel.request("GET", "/api/admin/rules")["rules"]
         assert len(rules) == 1, "Combined rule was split into multiple records after recreation"
@@ -435,6 +459,7 @@ def main():
         start()
         panel = Panel(http_port)
         panel.ready()
+        verify_native_control_disabled(name)
         panel.login()
         user.request("GET", "/api/user/auth/session", status=401)
         user.login("smoke-alice", "smoke-user-long-password")
@@ -478,7 +503,7 @@ def main():
         panel.request("POST", f'/api/admin/rules/{small_rule["id"]}/retry',
                       revision=small_rule["revision"], status=409)
         verify_traffic(bob["port_start"])
-        print("Container smoke test passed: authentication, low ports, real single-protocol and combined TCP+UDP traffic, recreation recovery, combined enable/disable and protocol changes, listener release after deletion, independent portals, owner filtering, user isolation, persisted usage, and real quota exhaustion")
+        print("Container smoke test passed: native CLI and control socket disabled, authentication, low ports, real single-protocol and combined TCP+UDP traffic, recreation recovery, combined enable/disable and protocol changes, listener release after deletion, independent portals, owner filtering, user isolation, persisted usage, and real quota exhaustion")
     except Exception:
         logs = docker("logs", name, check=False)
         print(logs.stdout + logs.stderr, file=sys.stderr)
