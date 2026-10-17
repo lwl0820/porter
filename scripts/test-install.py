@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import pty
 import select
+import sqlite3
 import shutil
 import subprocess
 import tarfile
@@ -21,7 +22,7 @@ SCRIPT = (ROOT / "scripts/install.sh").read_text()
 REAL_PYTHON = shutil.which("python3")
 
 STUB = r'''#!/usr/bin/python3
-import json, os, pathlib, shutil, subprocess, sys, signal
+import json, os, pathlib, shutil, subprocess, sys, signal, sqlite3
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 base = pathlib.Path(os.environ["CASE_DIR"])
@@ -153,7 +154,7 @@ elif name == "curl":
     else:
         if os.environ.get("EXIT_DURING_HEALTH"):
             enable("exited")
-        print("unexpected" if os.environ.get("WRONG_HEALTH_BODY") else '{"status":"ok"}')
+        print("unexpected" if os.environ.get("WRONG_HEALTH_BODY") else (os.environ.get("CONTROL_RULES", '{"rules":[]}') if "--unix-socket" in args else '{"status":"ok"}'))
 elif name == "systemctl":
     if args[0] == "show":
         if "--property=DropInPaths" in args:
@@ -171,10 +172,19 @@ elif name == "systemctl":
             enable("enabled")
         enable("active")
         (base / "stopped").unlink(missing_ok=True)
-        (base / "data/porter.db").touch()
+        database = base / "data/porter.db"
+        if not database.exists():
+            connection = sqlite3.connect(database)
+            connection.execute("CREATE TABLE rules (enabled INTEGER, protocol TEXT, listen_host TEXT, listen_port INTEGER)")
+            connection.commit(); connection.close()
     elif args[0] == "stop":
         if os.environ.get("STOP_FAIL"):
             sys.exit(1)
+        if os.environ.get("INSERT_RULE_ON_STOP") and not flag("stop_rule_inserted"):
+            connection = sqlite3.connect(base / "data/porter.db")
+            connection.execute("INSERT INTO rules VALUES (1, \"tcp+udp\", \"127.0.0.1\", 18080)")
+            connection.commit(); connection.close()
+            enable("stop_rule_inserted")
         if not os.environ.get("STILL_ACTIVE"):
             enable("stopped")
             (base / "active").unlink(missing_ok=True)
@@ -237,7 +247,8 @@ class InstallCase(unittest.TestCase):
         assets = []
         for arch in ("amd64", "arm64"):
             name = f"porter-{version}-linux-{arch}.tar.gz"
-            program = f'#!/bin/sh\nif [ "$1" = --version ]; then echo {version}; exit 0; fi\nexit 0\n'.encode()
+            help_redirect = " >&2" if kind == "help-stderr" else ""
+            program = f'#!/bin/sh\nif [ "$1" = --version ]; then echo {version}; exit 0; fi\nif [ "$1" = --help ]; then echo --check-config{help_redirect}; exit 0; fi\nif [ "$1" = --check-config ]; then [ -z "$PREFLIGHT_FAIL" ]; exit $?; fi\nexit 0\n'.encode()
             with tarfile.open(folder / name, "w:gz") as bundle:
                 info = tarfile.TarInfo("../porter" if kind == "traversal" else "porter")
                 if kind == "symlink":
@@ -293,6 +304,25 @@ class InstallCase(unittest.TestCase):
             if self.env.get("MOUNT_AFTER_LOCK"):
                 insertion = 'json.dump({"pid": int(pid), "start": start}, file)\n        if path == ' + json.dumps(str(self.config.parent / ".install-lock")) + ":\n            with open(" + json.dumps(str(self.base / "mountinfo")) + ", \"a\") as mounted:\n                mounted.write(" + json.dumps(self.env["MOUNT_AFTER_LOCK"]) + ")"
                 script = script.replace('json.dump({"pid": int(pid), "start": start}, file)', insertion)
+        if self.env.get("COMPONENT_CUT"):
+            checkpoint = "    def checkpoint(point):\n        if mode == \"reconfigure\" and point == os.environ.get(\"COMPONENT_CUT\"):\n            if os.environ.get(\"COMPONENT_CUT_KIND\") == \"kill\":\n                os.kill(os.getppid(), signal.SIGKILL)\n                os.kill(os.getpid(), signal.SIGKILL)\n            raise OSError(\"injected component boundary failure\")\n"
+            script = script.replace("    def mark(phase):", checkpoint + "    def mark(phase):")
+            boundaries = {
+                '    atomic_json(statepath, state)\n    def interrupted': '    atomic_json(statepath, state)\n    checkpoint("prepared")\n    def interrupted',
+                '        ctl("stop", "porter.service"); inactive(); mark("stopped")': '        ctl("stop", "porter.service"); inactive(); checkpoint("stopped"); mark("stopped")',
+                '        copy_owned(config, os.path.join(folder, "porter.env"))': '        checkpoint("backup-partial")\n        copy_owned(config, os.path.join(folder, "porter.env"))',
+                '        mark("backup_complete")': '        mark("backup_complete"); checkpoint("backup-complete")',
+                '        install_file(os.path.join(staging, "porter.env"), config, "0600")': '        install_file(os.path.join(staging, "porter.env"), config, "0600"); checkpoint("environment")',
+                '                os.unlink(command)\n            regular(os.path.join(directory, "porter"))': '                os.unlink(command); checkpoint("link-remove")\n            regular(os.path.join(directory, "porter"))',
+                '            regular(os.path.join(directory, "porter")); os.unlink(os.path.join(directory, "porter"))': '            regular(os.path.join(directory, "porter")); os.unlink(os.path.join(directory, "porter")); checkpoint("client-remove")',
+                '            os.symlink(directory + "/porter", command)\n        ctl("daemon-reload")': '            os.symlink(directory + "/porter", command); checkpoint("link-create")\n        ctl("daemon-reload")',
+                '        service_intent()\n        new = ': '        checkpoint("ready"); service_intent()\n        new = ',
+                '        atomic_json(statepath, new)': '        checkpoint("state"); atomic_json(statepath, new)',
+                '            mark("restored")': '            mark("restored"); checkpoint("restored")',
+            }
+            for original, replacement in boundaries.items():
+                self.assertIn(original, script)
+                script = script.replace(original, replacement)
         argv = ["/bin/bash", "-s", "--"]
         if language is not None:
             argv.extend(("--lang", language))
@@ -317,8 +347,18 @@ class InstallCase(unittest.TestCase):
             process.stdin.close()
             output = b""
             pending = list(self.dialogue() if dialogue is None else dialogue)
+            english = language == "en" or (language is None and (not pending or pending[0][1] != "2"))
+            web_prompt = "Enable Web service?" if english else "是否启用 Web 服务？"
+            cli_prompt = "Install command-line tool?" if english else "是否安装命令行工具？"
+            change_prompt = "Change management components?" if english else "是否修改管理组件？"
+            if "--uninstall" not in args and "--upgrade" not in args:
+                if not self.config.exists() and not any(web_prompt in prompt for prompt, _ in pending):
+                    index = 1 if pending and pending[0][0] == "Language" else 0
+                    pending[index:index] = [(web_prompt, ""), (cli_prompt, "")]
+                elif self.state.exists() and json.loads(self.state.read_text())["status"] == "complete" and not any(change_prompt in prompt for prompt, _ in pending):
+                    pending.insert(0, (change_prompt, ""))
             offset = 0
-            deadline = time.monotonic() + 12
+            deadline = time.monotonic() + 25
             while time.monotonic() < deadline:
                 if select.select([master], [], [], 0.05)[0]:
                     try:
@@ -376,6 +416,365 @@ class InstallCase(unittest.TestCase):
         return {str(path.relative_to(self.base)): path.read_bytes()
                 for folder in (self.config.parent, self.base / "data")
                 for path in folder.rglob("*") if path.is_file() and ".install-lock" not in path.parts}
+
+
+    def mode_dialogue(self, web, cli, change=False, credentials=False, confirm="yes", english=False):
+        choices = [("Enable Web service?" if english else "是否启用 Web 服务？", "yes" if web else "no"),
+                   ("Install command-line tool?" if english else "是否安装命令行工具？", "yes" if cli else "no")]
+        if change:
+            choices.insert(0, ("Change management components?" if english else "是否修改管理组件？", "yes"))
+        if credentials or (web and not change):
+            choices += [("Admin username:", "admin"), ("Admin password:", "test-secret"), ("Confirm password:", "test-secret"), ("Web listen address", "0.0.0.0:18080")] if english else self.dialogue()
+        if change:
+            choices.append(("Type yes to confirm" if english else "输入 yes 确认，", confirm))
+        return choices
+
+    def install_mode(self, web, cli, english=False):
+        return self.run_install(self.mode_dialogue(web, cli, english=english), language="en" if english else "zh-CN")
+
+    def reconfigure(self, web, cli, **kwargs):
+        return self.run_install(self.mode_dialogue(web, cli, change=True, **kwargs))
+
+    def assert_mode(self, web, cli):
+        state = json.loads(self.state.read_text())
+        self.assertEqual(state["schema"], 3)
+        self.assertEqual(state["features"], {"web": web, "cli": cli})
+        self.assertEqual(self.environment()["PORTER_WEB_ENABLED"], str(web).lower())
+        self.assertEqual(self.environment()["PORTER_CLI_ENABLED"], str(cli).lower())
+        self.assertTrue((self.directory / "porterd").exists())
+        self.assertEqual((self.directory / "porter").exists(), cli)
+        self.assertEqual(self.command.is_symlink(), cli and self.directory != self.command.parent)
+        self.assertEqual("command_link" in state, cli and self.directory != self.command.parent)
+
+    def test_three_component_install_modes_skip_unneeded_inputs_and_probes(self):
+        for english in (False, True):
+            for web, cli in ((True, True), (True, False), (False, True)):
+                with self.subTest(english=english, web=web, cli=cli):
+                    code, output = self.install_mode(web, cli, english)
+                    self.assertEqual(code, 0, output)
+                    self.assert_mode(web, cli)
+                    calls = self.actions("curl")
+                    self.assertEqual(any("/healthz" in str(call) for call in calls), web)
+                    self.assertEqual(any("--unix-socket" in call for call in calls), cli)
+                    self.assertFalse((self.config.parent / "cli.json").exists())
+                    if not web:
+                        self.assertNotIn("Admin username", output)
+                        self.assertNotIn("管理员用户名", output)
+                        self.assertNotIn("PORTER_ADMIN_USERNAME", self.environment())
+                        self.assertNotIn("PORTER_ADMIN_PASSWORD", self.environment())
+                        self.assertNotIn("PORTER_HTTP_ADDR", self.environment())
+                    if not cli:
+                        self.assertNotIn(" rules", output)
+                    self.reset_installation()
+
+    def test_all_disabled_reprompts_without_committing(self):
+        dialogue = self.mode_dialogue(False, False) + self.mode_dialogue(False, True)
+        code, output = self.run_install(dialogue)
+        self.assertEqual(code, 0, output)
+        self.assertIn("至少启用一种", output)
+        self.assert_mode(False, True)
+        self.reset_installation()
+        code, output = self.run_install(self.mode_dialogue(False, False) + [("是否启用 Web 服务？", "\x04")])
+        self.assertNotEqual(code, 0, output)
+        self.assertFalse(self.state.exists() or self.config.exists() or self.unit.exists())
+        self.assertFalse(any(call[0] in ("stop", "start", "enable") for call in self.actions("systemctl")))
+
+    def test_all_six_component_switches_preserve_data_identity_preferences_and_version(self):
+        modes = ((True, True), (True, False), (False, True))
+        for source in modes:
+            for target in modes:
+                if source == target:
+                    continue
+                with self.subTest(source=source, target=target):
+                    self.assertEqual(self.install_mode(*source)[0], 0)
+                    database = self.base / "data/porter.db"
+                    if source[0]:
+                        database.write_bytes(b"same rule ID / owner / traffic / accounts / plans")
+                    data_before = database.read_bytes()
+                    preference = self.config.parent / "cli.json"
+                    preference.write_text('{"schema":1,"language":"zh-CN"}')
+                    preference.chmod(0o600)
+                    config = self.environment()
+                    (self.base / "calls").unlink()
+                    code, output = self.reconfigure(*target, credentials=target[0] and not source[0])
+                    self.assertEqual(code, 0, output)
+                    self.assert_mode(*target)
+                    self.assertEqual(database.read_bytes(), data_before)
+                    self.assertEqual(preference.read_text(), '{"schema":1,"language":"zh-CN"}')
+                    self.assertEqual(json.loads(self.state.read_text())["version"], "v1.2.3")
+                    downloads = [str(call) for call in self.actions("curl") if "-o" in call]
+                    self.assertFalse(any("latest" in call for call in downloads))
+                    self.assertEqual(bool(downloads), target[1] and not source[1])
+                    self.assertTrue(any(call[0] == "stop" for call in self.actions("systemctl")))
+                    for key, value in config.items():
+                        if key not in ("PORTER_WEB_ENABLED", "PORTER_CLI_ENABLED"):
+                            self.assertEqual(self.environment()[key], value)
+                    backup = next((self.directory / ".tmp").glob("upgrade.*"))
+                    transaction = json.loads((backup / "transaction.json").read_text())
+                    self.assertEqual(transaction["operation"], "reconfigure")
+                    self.assertEqual(transaction["old_features"], {"web": source[0], "cli": source[1]})
+                    self.assertEqual(transaction["target_features"], {"web": target[0], "cli": target[1]})
+                    self.reset_installation()
+
+    def test_candidate_preflight_accepts_help_on_stderr_and_still_checks_config(self):
+        # Go flag的真实帮助写入stderr；不能把该程序误判为旧版本。
+        for invalid in (True, False):
+            self.fixtures("help-stderr")
+            if invalid:
+                self.env["PREFLIGHT_FAIL"] = "1"
+            else:
+                self.env.pop("PREFLIGHT_FAIL", None)
+            code, output = self.install_mode(False, True)
+            self.assertEqual(code, 1 if invalid else 0, output)
+            if invalid:
+                self.assertFalse(self.state.exists() or self.config.exists() or self.unit.exists())
+                self.assertFalse(any(call[0] in ("stop", "start", "enable") for call in self.actions("systemctl")))
+            else:
+                self.assert_mode(False, True)
+                code, output = self.reconfigure(True, True, credentials=True)
+                self.assertEqual(code, 0, output)
+                self.assert_mode(True, True)
+                self.fixtures("help-stderr", version="v1.3.0")
+                code, output = self.run_install([("输入 yes 确认升级", "yes")], args=("--upgrade",))
+                self.assertEqual(code, 0, output)
+                self.assertEqual(json.loads(self.state.read_text())["version"], "v1.3.0")
+            self.reset_installation()
+
+    def test_component_switch_cancel_preflight_and_noop_do_not_stop_or_commit(self):
+        self.assertEqual(self.install_mode(True, True)[0], 0)
+        saved = self.snapshot()
+        for failure in ("cancel", "preflight", "noop"):
+            (self.base / "calls").unlink()
+            if failure == "preflight":
+                self.env["PREFLIGHT_FAIL"] = "1"
+            code, output = self.reconfigure(True, failure == "noop", confirm="" if failure == "cancel" else "yes")
+            self.assertEqual(code, 1 if failure == "preflight" else 0, output)
+            self.assertEqual(self.snapshot(), saved)
+            self.assertFalse(any(call[0] in ("stop", "start", "enable", "disable") for call in self.actions("systemctl")))
+            self.env.pop("PREFLIGHT_FAIL", None)
+
+    def test_unchanged_rerun_keeps_stopped_disabled_service_and_saved_configuration(self):
+        self.assert_success()
+        state = self.state.read_bytes()
+        config = self.config.read_bytes()
+        (self.base / "stopped").touch()
+        (self.base / "active").unlink()
+        (self.base / "enabled").unlink()
+        (self.base / "calls").unlink()
+        code, output = self.run_install(terminal=False)
+        self.assertEqual(code, 0, output)
+        self.assertIn("服务保持停止状态", output)
+        self.assertNotIn("已就绪", output)
+        self.assertEqual(self.state.read_bytes(), state)
+        self.assertEqual(self.config.read_bytes(), config)
+        self.assertFalse((self.base / "active").exists() or (self.base / "enabled").exists())
+        self.assertFalse(any(call[0] in ("enable", "start", "stop", "daemon-reload") for call in self.actions("systemctl")))
+
+    def test_web_only_ignores_and_preserves_unrelated_system_command(self):
+        self.command.write_text("foreign command")
+        code, output = self.install_mode(True, False)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.command.read_text(), "foreign command")
+        (self.base / "calls").unlink()
+        code, output = self.reconfigure(True, True)
+        self.assertNotEqual(code, 0, output)
+        self.assertEqual(self.command.read_text(), "foreign command")
+        self.assertFalse(any(call[0] == "stop" for call in self.actions("systemctl")))
+        code, output = self.uninstall(True)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.command.read_text(), "foreign command")
+
+    def test_modes_reinstall_upgrade_and_purge_preserve_selected_components(self):
+        for mode in ((True, False), (False, True)):
+            self.fixtures()
+            self.assertEqual(self.install_mode(*mode)[0], 0)
+            data = self.base / "data/porter.db"
+            data.write_bytes(b"retained data")
+            config = self.config.read_bytes()
+            self.assertEqual(self.uninstall()[0], 0)
+            self.assert_success(terminal=False)
+            self.assert_mode(*mode)
+            self.assertEqual(self.config.read_bytes(), config)
+            self.assertEqual(data.read_bytes(), b"retained data")
+            code, output = self.upgrade()
+            self.assertEqual(code, 0, output)
+            self.assert_mode(*mode)
+            self.assertEqual(data.read_bytes(), b"retained data")
+            code, output = self.uninstall(True)
+            self.assertEqual(code, 0, output)
+            self.assertFalse(self.config.exists() or self.state.exists() or data.exists() or self.command.exists())
+            self.reset_installation()
+
+    def test_schema3_invalid_features_and_environment_mismatch_refuse_changes(self):
+        self.assert_success()
+        original = self.state.read_bytes()
+        for value in ({"web": False, "cli": False}, {"web": 1, "cli": True}, {"web": True}, {"web": True, "cli": True, "other": False}):
+            state = json.loads(original)
+            state["features"] = value
+            self.state.write_text(json.dumps(state))
+            code, output = self.run_install(terminal=False)
+            self.assertNotEqual(code, 0, output)
+        self.state.write_bytes(original)
+        self.config.write_text(self.config.read_text().replace('PORTER_WEB_ENABLED="true"', 'PORTER_WEB_ENABLED="false"'))
+        saved = self.snapshot()
+        (self.base / "calls").unlink()
+        for action in (lambda: self.run_install(terminal=False), lambda: self.uninstall(answers=[])):
+            code, output = action()
+            self.assertNotEqual(code, 0, output)
+            self.assertEqual(self.snapshot(), saved)
+        self.assertFalse(any(call[0] == "stop" for call in self.actions("systemctl")))
+
+    def test_schema2_upgrade_retains_both_and_old_program_preflight_refuses_before_stop(self):
+        self.assert_success()
+        state = json.loads(self.state.read_text())
+        state["schema"] = 2
+        del state["features"]
+        self.state.write_text(json.dumps(state))
+        self.config.write_text("\n".join(line for line in self.config.read_text().splitlines() if "_ENABLED=" not in line) + "\n")
+        self.assert_success(terminal=False)
+        (self.base / "calls").unlink()
+        code, output = self.reconfigure(False, True)
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("请先使用 --upgrade", output)
+        self.assertFalse(any(call[0] == "stop" for call in self.actions("systemctl")))
+        code, output = self.upgrade()
+        self.assertEqual(code, 0, output)
+        self.assert_mode(True, True)
+        self.reset_installation()
+        self.fixtures()
+        self.assert_success()
+        self.fixtures(version="v1.3.0")
+        self.env["PREFLIGHT_FAIL"] = "1"
+        (self.base / "calls").unlink()
+        code, output = self.run_install([], args=("--upgrade",))
+        self.assertNotEqual(code, 0, output)
+        self.assertFalse(any(call[0] == "stop" for call in self.actions("systemctl")))
+
+    def test_enabling_web_rejects_overlapping_rules_online_and_stopped_without_database_side_effects(self):
+        for stopped in (False, True):
+            for host, protocol, enabled, reject in (("0.0.0.0", "tcp", True, True), ("127.0.0.1", "tcp+udp", True, True), ("::ffff:127.0.0.1", "tcp", True, True), ("127.0.0.1", "udp", True, False), ("::", "tcp", True, False), ("127.0.0.1", "tcp", False, False)):
+                with self.subTest(stopped=stopped, host=host, protocol=protocol, enabled=enabled):
+                    self.fixtures()
+                    self.assertEqual(self.install_mode(False, True)[0], 0)
+                    database = self.base / "data/porter.db"
+                    connection = sqlite3.connect(database)
+                    connection.execute("INSERT INTO rules VALUES (?, ?, ?, ?)", (enabled, protocol, host, 18080))
+                    connection.commit(); connection.close()
+                    self.env["CONTROL_RULES"] = json.dumps({"rules": [{"enabled": enabled, "protocol": protocol, "listen_host": host, "listen_port": 18080}]})
+                    if stopped:
+                        (self.base / "stopped").touch()
+                        (self.base / "active").unlink()
+                    saved = self.recovery_snapshot()
+                    (self.base / "calls").unlink()
+                    code, output = self.reconfigure(True, True, credentials=True)
+                    self.assertEqual(code, 1 if reject else 0, output)
+                    self.assertFalse(Path(str(database) + "-journal").exists())
+                    self.assertFalse(Path(str(database) + "-wal").exists())
+                    self.assertFalse(Path(str(database) + "-shm").exists())
+                    if reject:
+                        self.assertIn("Web 监听与已有转发规则冲突", output)
+                        self.assertEqual(self.recovery_snapshot(), saved)
+                        self.assertFalse(any(call[0] == "stop" for call in self.actions("systemctl")))
+                    else:
+                        self.assertEqual(database.read_bytes(), saved[str(database)][3])
+                        self.assertEqual(database.stat().st_uid, saved[str(database)][0])
+                        self.assertEqual(database.stat().st_mode, saved[str(database)][2])
+                    self.env.pop("CONTROL_RULES")
+                    self.reset_installation()
+
+    def test_rule_created_between_preflight_and_stop_is_preserved_and_web_change_rolls_back(self):
+        self.assertEqual(self.install_mode(False, True)[0], 0)
+        config = self.config.read_bytes()
+        state = self.state.read_bytes()
+        self.env["INSERT_RULE_ON_STOP"] = "1"
+        (self.base / "calls").unlink()
+        code, output = self.reconfigure(True, True, credentials=True)
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("已恢复原版本", output)
+        self.assertEqual(self.config.read_bytes(), config)
+        self.assertEqual(self.state.read_bytes(), state)
+        connection = sqlite3.connect(self.base / "data/porter.db")
+        try:
+            self.assertEqual(connection.execute("SELECT enabled, protocol, listen_host, listen_port FROM rules").fetchall(), [(1, "tcp+udp", "127.0.0.1", 18080)])
+        finally:
+            connection.close()
+        self.assertTrue((self.base / "active").exists())
+        self.assertFalse(Path(str(self.base / "data/porter.db") + "-journal").exists())
+        self.env.pop("INSERT_RULE_ON_STOP")
+
+    def recovery_snapshot(self):
+        result = {}
+        for path in (self.state, self.config, self.unit, self.directory / "porterd", self.directory / "porter", self.command, self.config.parent / "cli.json", self.base / "data", self.base / "data/porter.db"):
+            if path.is_symlink():
+                result[str(path)] = ("link", os.readlink(path))
+            elif path.exists():
+                info = path.stat()
+                result[str(path)] = (info.st_uid, info.st_gid, info.st_mode, path.read_bytes() if path.is_file() else None)
+        return result
+
+    def test_component_transaction_fault_and_sigkill_boundaries_restore_exact_original(self):
+        cases = (("prepared", True, True, True, False), ("stopped", True, True, True, False),
+                 ("backup-partial", True, True, True, False), ("backup-complete", True, True, True, False),
+                 ("environment", True, True, True, False), ("link-remove", True, True, True, False),
+                 ("client-remove", True, True, True, False), ("link-create", True, False, True, True),
+                 ("ready", False, True, True, True), ("state", True, True, True, False))
+        for kind in ("error", "kill"):
+            for index, (point, old_web, old_cli, new_web, new_cli) in enumerate(cases):
+                with self.subTest(kind=kind, point=point):
+                    self.fixtures()
+                    self.assertEqual(self.install_mode(old_web, old_cli)[0], 0)
+                    preference = self.config.parent / "cli.json"
+                    preference.write_text('{"schema":1,"language":"zh-CN"}')
+                    preference.chmod(0o600)
+                    if old_web:
+                        (self.base / "data/porter.db").write_bytes(b"original rule IDs and traffic")
+                    inactive = index % 2 == 1
+                    if inactive:
+                        (self.base / "stopped").touch()
+                        (self.base / "active").unlink()
+                        (self.base / "enabled").unlink()
+                    before = self.recovery_snapshot()
+                    self.env.update(COMPONENT_CUT=point, COMPONENT_CUT_KIND=kind)
+                    code, output = self.reconfigure(new_web, new_cli, credentials=new_web and not old_web)
+                    self.assertNotEqual(code, 0, output)
+                    self.env.pop("COMPONENT_CUT"); self.env.pop("COMPONENT_CUT_KIND")
+                    record = json.loads(self.state.read_text())
+                    if record["status"] == "upgrading":
+                        code, output = self.run_install(terminal=False)
+                        self.assertEqual(code, 0, output)
+                        self.assertIn("已恢复稳定安装", output)
+                    self.assertEqual(self.recovery_snapshot(), before)
+                    self.assertEqual((self.base / "active").exists(), not inactive)
+                    self.assertEqual((self.base / "enabled").exists(), not inactive)
+                    self.assertFalse((self.config.parent / ".install-lock").exists())
+                    self.assertFalse((self.directory / ".install-lock").exists())
+                    self.reset_installation()
+
+    def test_component_rollback_interruption_and_legacy_six_key_journal_recovery(self):
+        self.assert_success()
+        before = self.recovery_snapshot()
+        self.env.update(COMPONENT_CUT="restored", COMPONENT_CUT_KIND="kill", HEALTH_FAIL="1")
+        code, output = self.reconfigure(True, False)
+        self.assertNotEqual(code, 0, output)
+        for key in ("COMPONENT_CUT", "COMPONENT_CUT_KIND", "HEALTH_FAIL"):
+            self.env.pop(key)
+        code, output = self.run_install(terminal=False)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.recovery_snapshot(), before)
+        self.reset_installation()
+        self.legacy()
+        before = self.recovery_snapshot()
+        self.env["KILL_PHASE"] = "switching"
+        self.assertNotEqual(self.upgrade()[0], 0)
+        self.env.pop("KILL_PHASE")
+        state = json.loads(self.state.read_text())
+        journal = self.directory / ".tmp" / state["upgrade_id"] / "transaction.json"
+        record = json.loads(journal.read_text())
+        journal.write_text(json.dumps({key: value for key, value in record.items() if key in ("id", "phase", "active", "enabled", "cli", "new_link")}))
+        journal.chmod(0o600)
+        code, output = self.run_install(terminal=False)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.recovery_snapshot(), before)
 
     def test_languages_help_validation_and_selection(self):
         for language, marker in (("zh-CN", "原生交互安装"), ("en", "native interactive installer")):
@@ -1030,13 +1429,14 @@ class InstallCase(unittest.TestCase):
         program.chmod(0o755)
         self.state.write_text(json.dumps({"schema": 1, "directory": str(self.directory), "arch": "amd64", "version": version, "status": "complete"}))
         self.state.chmod(0o600)
+        self.config.write_text("\n".join(line for line in self.config.read_text().splitlines() if "_ENABLED=" not in line) + "\n")
         text = self.unit.read_text().replace('/porterd"', '/porter"')
         self.unit.write_text(text)
 
     def test_split_layout_path_and_link_ownership(self):
         self.assert_success()
         state = json.loads(self.state.read_text())
-        self.assertEqual((state["schema"], state["layout"], state["command_link"]), (2, "split", str(self.command)))
+        self.assertEqual((state["schema"], state["layout"], state["command_link"]), (3, "split", str(self.command)))
         self.assertEqual(os.readlink(self.command), str(self.directory / "porter"))
         result = subprocess.run([str(self.command), "--version"], capture_output=True, text=True, env={"PATH": str(self.command.parent)})
         self.assertEqual((result.returncode, result.stdout.strip()), (0, "v1.2.3"))
@@ -1137,10 +1537,12 @@ class InstallCase(unittest.TestCase):
         code, output = self.upgrade()
         self.assertEqual(code, 0, output)
         self.assertEqual(database.read_bytes(), b"accounts rules statistics")
-        self.assertEqual(self.config.read_bytes(), before)
+        values = self.environment()
+        self.assertEqual(values["PORTER_WEB_ENABLED"], "true")
+        self.assertEqual(values["PORTER_CLI_ENABLED"], "false")
         self.assertEqual((self.base / "data/porter.db-wal").read_bytes(), b"wal")
-        self.assertEqual(json.loads(self.state.read_text())["schema"], 2)
-        self.assertTrue(self.command.is_symlink())
+        self.assertEqual(json.loads(self.state.read_text())["schema"], 3)
+        self.assertFalse(self.command.exists() or (self.directory / "porter").exists())
         backups = list((self.directory / ".tmp").glob("upgrade.*"))
         self.assertEqual(len(backups), 1)
         self.assertEqual(json.loads((backups[0] / "install.json").read_text())["schema"], 1)
@@ -1276,23 +1678,27 @@ class InstallCase(unittest.TestCase):
         self.assertEqual((backup / "cli.json").read_bytes(), cli.read_bytes())
 
     def test_upgrade_failure_at_replacement_and_backup_boundaries_recovers(self):
-        for boundary in ("backup", "porter", "porterd", "unit", "state"):
-            self.fixtures()
-            self.legacy()
-            (self.base / "data/porter.db").write_bytes(b"old database")
-            (self.directory / "porter").chmod(0o750)
-            self.unit.chmod(0o640)
-            before = self.snapshot()
-            metadata = {str(path): (path.stat().st_uid, path.stat().st_gid, path.stat().st_mode & 0o777) for path in (self.directory / "porter", self.unit, self.config, self.state, self.base / "data", self.base / "data/porter.db")}
-            self.env["FAULT_BOUNDARY"] = boundary
-            code, output = self.upgrade()
-            self.assertNotEqual(code, 0, output)
-            self.assertIn("已恢复原版本", output)
-            self.assertEqual(before, self.snapshot())
-            self.assertFalse(self.command.exists() or (self.directory / "porterd").exists())
-            self.assertEqual(metadata, {str(Path(path)): (Path(path).stat().st_uid, Path(path).stat().st_gid, Path(path).stat().st_mode & 0o777) for path in metadata})
-            del self.env["FAULT_BOUNDARY"]
-            self.reset_installation()
+        for legacy in (True, False):
+            # 旧单程序升级保持仅Web，不再替换CLI；双入口升级覆盖客户端替换。
+            boundaries = ("backup", "porterd", "unit", "state") if legacy else ("backup", "porter", "porterd", "unit", "state")
+            for boundary in boundaries:
+                with self.subTest(legacy=legacy, boundary=boundary):
+                    self.fixtures()
+                    if legacy:
+                        self.legacy()
+                    else:
+                        self.assert_success()
+                    (self.base / "data/porter.db").write_bytes(b"old database")
+                    (self.directory / "porter").chmod(0o750)
+                    self.unit.chmod(0o640)
+                    before = self.recovery_snapshot()
+                    self.env["FAULT_BOUNDARY"] = boundary
+                    code, output = self.upgrade()
+                    self.assertNotEqual(code, 0, output)
+                    self.assertIn("已恢复原版本", output)
+                    self.assertEqual(before, self.recovery_snapshot())
+                    del self.env["FAULT_BOUNDARY"]
+                    self.reset_installation()
 
     def test_upgrade_rollback_interruption_can_resume(self):
         for phase in ("restoring", "restored"):
@@ -1381,25 +1787,32 @@ class InstallCase(unittest.TestCase):
         self.assertTrue((self.base / "active").exists())
 
     def test_upgrade_rejects_data_mount_root_before_stop_and_rechecks_under_lock(self):
-        self.assert_success()
-        before = self.snapshot()
-        mountinfo = self.base / "mountinfo"
-        data = str(self.base / "data")
-        root_line = "1 0 0:1 / / rw - tmpfs tmpfs rw\n"
-        mounted_line = "2 1 0:1 / " + data.replace(" ", "\\040") + " rw - tmpfs tmpfs rw\n"
-        self.env["MOUNT_FIXTURE"] = "1"
-        for locked in (False, True):
-            mountinfo.write_text(root_line if locked else root_line + mounted_line)
-            if locked:
-                self.env["MOUNT_AFTER_LOCK"] = mounted_line
-            (self.base / "calls").unlink()
-            code, output = self.upgrade(answers=[("输入 yes 确认升级", "yes")] if locked else [])
-            self.assertNotEqual(code, 0, output)
-            self.assertIn("挂载根", output)
-            self.assertEqual(self.snapshot(), before)
-            self.assertFalse(any(call[0] == "stop" for call in self.actions("systemctl")))
-            self.env.pop("MOUNT_AFTER_LOCK", None)
-        self.env.pop("MOUNT_FIXTURE")
+        for operation in ("upgrade", "reconfigure"):
+            self.fixtures()
+            self.assert_success()
+            before = self.snapshot()
+            mountinfo = self.base / "mountinfo"
+            data = str(self.base / "data")
+            root_line = "1 0 0:1 / / rw - tmpfs tmpfs rw\n"
+            mounted_line = "2 1 0:1 / " + data.replace(" ", "\\040") + " rw - tmpfs tmpfs rw\n"
+            self.env["MOUNT_FIXTURE"] = "1"
+            for locked in (False, True):
+                with self.subTest(operation=operation, locked=locked):
+                    mountinfo.write_text(root_line if locked else root_line + mounted_line)
+                    if locked:
+                        self.env["MOUNT_AFTER_LOCK"] = mounted_line
+                    (self.base / "calls").unlink()
+                    if operation == "upgrade":
+                        code, output = self.upgrade(answers=[("输入 yes 确认升级", "yes")] if locked else [])
+                    else:
+                        code, output = self.reconfigure(True, False)
+                    self.assertNotEqual(code, 0, output)
+                    self.assertIn("挂载根", output)
+                    self.assertEqual(self.snapshot(), before)
+                    self.assertFalse(any(call[0] == "stop" for call in self.actions("systemctl")))
+                    self.env.pop("MOUNT_AFTER_LOCK", None)
+            self.env.pop("MOUNT_FIXTURE")
+            self.reset_installation()
 
     def test_mountinfo_parent_filesystem_allowed_and_escaped_mountpoint_decoded(self):
         helper = SCRIPT.split("PY_HELPER='", 1)[1].split("\n'\npy()", 1)[0]

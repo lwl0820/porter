@@ -71,21 +71,25 @@ type Options struct {
 }
 
 func New(ctx context.Context, repo Repository, engine *forward.Engine, adminAddr string, options ...Options) (*Service, error) {
-	h, p, err := net.SplitHostPort(adminAddr)
-	if err != nil {
-		return nil, err
-	}
-	port, err := strconv.Atoi(p)
-	if err != nil {
-		return nil, err
-	}
-	addr, err := netip.ParseAddr(h)
-	if h == "" {
-		addr = netip.IPv4Unspecified()
-		err = nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("管理监听地址必须是 IP：%w", err)
+	var addr netip.Addr
+	var port int
+	if adminAddr != "" {
+		h, p, err := net.SplitHostPort(adminAddr)
+		if err != nil {
+			return nil, err
+		}
+		port, err = strconv.Atoi(p)
+		if err != nil || port < 1 || port > 65535 {
+			return nil, fmt.Errorf("管理监听端口范围为 1–65535")
+		}
+		addr, err = netip.ParseAddr(h)
+		if h == "" {
+			addr = netip.IPv4Unspecified()
+			err = nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("管理监听地址必须是 IP：%w", err)
+		}
 	}
 	s := &Service{repo: repo, engine: engine, items: make(map[string]model.Rule), running: make(map[string]*runtimeGroup), adminHost: addr.Unmap(), adminPort: port, traffic: make(map[string]*forward.Traffic), persisted: make(map[string]model.Traffic), stopTraffic: make(chan struct{}), trafficDone: make(chan struct{})}
 	s.flushInterval = 5 * time.Second

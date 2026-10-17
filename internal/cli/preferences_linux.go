@@ -129,13 +129,50 @@ func stateAllowsPreferences(data []byte) bool {
 		return true
 	}
 	var state struct {
-		Schema int    `json:"schema"`
-		Status string `json:"status"`
+		Schema   int             `json:"schema"`
+		Status   string          `json:"status"`
+		Features json.RawMessage `json:"features"`
 	}
-	if json.Unmarshal(data, &state) != nil || (state.Schema != 1 && state.Schema != 2) {
+	if json.Unmarshal(data, &state) != nil {
 		return false
 	}
-	return state.Status == "complete" || state.Status == "initializing"
+	if state.Schema == 1 || state.Schema == 2 {
+		return state.Status == "complete" || state.Status == "initializing"
+	}
+	if state.Schema != 3 || state.Status != "complete" {
+		return false
+	}
+	// schema3须显式启用CLI；拒绝缺失、重复、未知键及非布尔值。
+	decoder := json.NewDecoder(bytes.NewReader(state.Features))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return false
+	}
+	features := make(map[string]bool, 2)
+	for decoder.More() {
+		key, err := decoder.Token()
+		name, ok := key.(string)
+		if err != nil || !ok || (name != "web" && name != "cli") {
+			return false
+		}
+		if _, exists := features[name]; exists {
+			return false
+		}
+		var value any
+		if decoder.Decode(&value) != nil {
+			return false
+		}
+		enabled, ok := value.(bool)
+		if !ok {
+			return false
+		}
+		features[name] = enabled
+	}
+	if token, err = decoder.Token(); err != nil || token != json.Delim('}') {
+		return false
+	}
+	return len(features) == 2 && features["cli"]
+
 }
 
 func (p *preferenceFiles) Save(ctx context.Context, language string, overwrite bool) (string, error) {

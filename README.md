@@ -2,7 +2,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-Porter is a self-hosted web panel for TCP and UDP port forwarding on one Linux server. Manage forwarding rules with SQLite persistence and a single-container deployment.
+Porter manages TCP and UDP port forwarding on one Linux server, with SQLite persistence. Native installations can use a Web panel, a command-line client, or both; Docker deployments use the Web panel.
 
 - Create, inspect, edit, delete, enable, disable, and retry TCP, UDP, or combined TCP+UDP rules.
 - Filter by protocol or state, and search names and addresses.
@@ -10,7 +10,7 @@ Porter is a self-hosted web panel for TCP and UDP port forwarding on one Linux s
 - Restore enabled rules after restart, without letting one occupied port block the others.
 - Separate administrator and user portals; inspect rule owners, filter by user, and administer every user’s rules.
 - Create plans and users, allocate exclusive contiguous ports, and enforce four accounting modes with three UTC reset schedules.
-- Configure the administrator through environment variables; ordinary users are created by the administrator, without self-registration or an external database.
+- Configure Web administrator credentials through environment variables; ordinary users are created by the administrator, without self-registration or an external database.
 - Manage rules from a bilingual interactive menu or parameter commands on native Linux installations.
 
 Porter uses ordinary proxy connections. The destination sees the forwarding server's address. It does not preserve the client's source IP or manage host firewalls and cloud security groups. A running rule means its local listener is ready, not that its destination is reachable. Editing forwarding parameters, disabling or deleting a rule ends its active sessions; renaming alone preserves them. Restarting or upgrading interrupts all sessions.
@@ -29,7 +29,17 @@ Supports Ubuntu 22.04/24.04, Debian 12/13, RHEL/Rocky Linux/AlmaLinux 9/10 on am
 
 The script first offers **1 English / 2 中文**, defaulting to English when you press Enter. Specify `bash -s -- --lang en` or `bash -s -- --lang zh-CN` after the pipe to choose directly. Help is available without a terminal through `bash install.sh --help --lang en`, with English as the default. Installer help, prompts, errors and results follow the chosen language; system command diagnostics retain their original language. This selection does not set the CLI's saved language.
 
-First installation asks for an **admin username, hidden password, password confirmation and Web listen address**. Passwords are neither generated nor echoed. Use a complete `IPv4:port` or `[IPv6]:port`, such as `127.0.0.1:18080`, `0.0.0.0:8080` or `[::]:8080`, with a port from 1 to 65535. For remote access to a wildcard address, replace the displayed loopback IP with the server IP. Restrict the Web port to trusted networks; the installer does not configure a firewall or HTTPS.
+After language selection, first installation asks whether to enable **Web management** and **command-line management** separately. Both default to enabled; at least one must remain enabled. If you disable both, the installer asks again before committing the installation.
+
+| Selection | Installed management access | Web setup |
+| --- | --- | --- |
+| Web + CLI (default) | Web panel and `sudo porter` | Administrator credentials and listen address required |
+| Web only | Web panel; no managed CLI program, PATH entry or local control socket | Administrator credentials and listen address required |
+| CLI only | `sudo porter`; no Web listener, pages or HTTP API | No username, password or Web listen address requested |
+
+The background `porterd` service runs in all three modes and handles forwarding. CLI-only management needs the service running and root or sudo access.
+
+When Web is enabled, installation asks for an **admin username, hidden password, password confirmation and Web listen address**. Passwords are neither generated nor echoed. Use a complete `IPv4:port` or `[IPv6]:port`, such as `127.0.0.1:18080`, `0.0.0.0:8080` or `[::]:8080`, with a port from 1 to 65535. For remote access to a wildcard address, replace the displayed loopback IP with the server IP. Restrict the Web port to trusted networks; the installer does not configure a firewall or HTTPS.
 
 The program directory supports spaces, `$` and `%`, but cannot contain quotes or backslashes due to systemd path restrictions. It cannot be inside `/var/lib/porter` or `/etc/porter`. By default the latest stable [GitHub Release](https://github.com/lwl0820/porter/releases) is installed. To specify a published version and directory:
 
@@ -45,9 +55,9 @@ Default files and service; `--install-dir` changes only the program directory:
 | Resource | Location |
 | --- | --- |
 | Service program | `/opt/porter/porterd` |
-| Command-line client | `/opt/porter/porter` |
-| System command | `/usr/bin/porter`, a managed link to the client |
-| Admin and listen configuration | `/etc/porter/porter.env`, mode `600` |
+| Command-line client (when enabled) | `/opt/porter/porter` |
+| System command (when CLI is enabled) | `/usr/bin/porter`, a managed link to the client |
+| Service configuration, including selected components | `/etc/porter/porter.env`, mode `600` |
 | CLI language preference | `/etc/porter/cli.json`, mode `600`, created on first language selection |
 | Installation record | `/etc/porter/install.json`, mode `600` |
 | SQLite and journal files | `/var/lib/porter`, writable by the service user |
@@ -55,9 +65,17 @@ Default files and service; `--install-dir` changes only the program directory:
 
 The dedicated non-login `porter` user/group runs the service with only `CAP_NET_BIND_SERVICE`, supporting low ports, restart on failure and startup at boot. Configuration uses systemd `EnvironmentFile` syntax: double-quoted values with backslashes before literal backslashes, double quotes, dollar signs and backticks. For example, write a literal `$` as `\$` and a literal `\` as `\\`. Do not source this file or use Compose-style `$$`. Additional `PORTER_*` settings, such as `PORTER_COOKIE_SECURE="true"`, may be appended with the same quoting. Restart with `sudo systemctl restart porter.service` after editing.
 
-Repeating installation in the same directory preserves credentials, listen address, programs and database without upgrading. Partial installation failures can be retried using saved credentials. Changing versions requires `--upgrade`; a different `--version` alone is rejected. A missing managed system link is repaired, while unknown files or links at `/usr/bin/porter` are never overwritten or adopted. When `--install-dir /usr/bin` is used, the installed client itself provides the system command. Unknown existing users, services, configuration or data are never taken over; Docker data is not migrated. Success requires an active, enabled service and an exact healthy `/healthz` response at the configured address.
+Rerun the same installation command to change management access. For an existing installation, **Change management components? [no]** defaults to keeping the current selection. Answer `yes` to change it, then answer the Web and CLI questions; each defaults to its current value. All transitions between the three combinations are supported. An unchanged selection preserves programs, configuration and data without downloading a newer version or restarting the service; stopped services and disabled startup remain as they were.
 
-The installer prints both user `/user/` and administrator `/admin/` URLs. The root URL opens the ordinary user portal. Administrators create ordinary user accounts in the admin portal.
+Before a change, the installer shows the current and target combinations and asks for confirmation. Switching restarts the service and interrupts existing forwarding sessions. Rules, statistics, users, plans and CLI language preferences are retained. Existing valid Web credentials and listen settings are reused; enabling Web asks for them only when no valid saved configuration exists. Disabling Web preserves its saved settings, and disabling CLI preserves its language preference. Adding CLI downloads the **currently installed version**, rather than upgrading implicitly. Canceling before confirmation makes no changes; a failed switch restores the previous programs, configuration, data and service state. After a forced interruption, rerun the installer to recover before requesting another change.
+
+When enabling Web, its listen address must not overlap an enabled TCP or TCP+UDP forwarding rule. A detected conflict rejects the switch and preserves the original combination and rules; choose a different Web address or adjust the rule before retrying.
+
+Older installations must first use `--upgrade` to install a release supporting component selection. That upgrade preserves their existing management access: Web-only for the legacy single-program layout, or both for the older split layout. Then rerun the installer to change the selection. A target release without support for component configuration is rejected before stopping the service.
+
+Partial installation failures can be retried using saved settings. Changing versions requires `--upgrade`; a different `--version` alone is rejected. With CLI enabled, a missing managed system link is repaired, while unknown files or links at `/usr/bin/porter` are never overwritten or adopted. Web-only installation leaves unrelated system `porter` commands alone. When `--install-dir /usr/bin` is used with CLI enabled, the installed client itself provides the system command. Unknown existing users, services, configuration or data are never taken over; Docker data is not migrated. First installation succeeds only with an active, enabled service and readiness checks for every selected entry: HTTP `/healthz` for Web, and a root-only local rule query for CLI. The CLI check does not prompt for or save a language.
+
+With Web enabled, the installer prints both user `/user/` and administrator `/admin/` URLs. The root URL opens the ordinary user portal. Administrators create ordinary user accounts in the admin portal. With CLI enabled, the installer prints the `sudo porter` command; CLI-only installations have no Web URL.
 
 Uninstall with the current script. Uninstall needs Python 3 already installed, but does not fetch Releases, install dependencies or request administrator credentials. It detects a custom program directory from the installation record; an explicit `--install-dir` must match:
 
@@ -66,7 +84,7 @@ curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install
   bash -s -- --uninstall --lang en
 ```
 
-Review the resource list and type `yes` to confirm, or Enter to cancel. By default uninstall stops and disables the service and removes its managed programs, unit and system link. It retains the **entire** `/var/lib/porter` directory, `/etc/porter/porter.env`, `/etc/porter/cli.json`, the restricted installation record and the dedicated service account/group. Reinstall with the current script and the original program directory to reuse credentials, listen address, databases and CLI language. It restores the **same recorded version and layout**, which must still be available as a Release; a failed download preserves configuration and data. Older scripts do not recognize the split layout and must not be used for recovery. After an interrupted uninstall, retry the same uninstall options before reinstalling.
+Review the resource list and type `yes` to confirm, or Enter to cancel. By default uninstall stops and disables the service and removes its managed programs, unit and system link. It retains the **entire** `/var/lib/porter` directory, `/etc/porter/porter.env`, `/etc/porter/cli.json`, the restricted installation record and the dedicated service account/group. Reinstall with the current script and the original program directory to reuse credentials, listen address, databases and CLI language. It restores the **same recorded version, layout and component selection**, which must still be available as a Release; a failed download preserves configuration and data. Older scripts do not recognize the split layout and must not be used for recovery. After an interrupted uninstall, retry the same uninstall options before reinstalling.
 
 To permanently remove accounts, rules and statistics, add `--purge`. After `yes`, a second confirmation requires typing `DELETE`:
 
@@ -96,21 +114,21 @@ curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install
 # To pin the target, add: --version vX.Y.Z
 ```
 
-The installer verifies the current managed installation, target checksum and both program versions before stopping anything. It displays the source and target versions and asks for confirmation. Upgrading briefly interrupts forwarding. After stopping the service it backs up the previous programs, unit, exact installation record, configuration and **complete data directory**, then switches the programs and unit together. Both programs must come from the same release. Downgrades, single-program target archives, customized units and conflicting target files are rejected. A complete split installation at the same version is an idempotent check.
+Upgrading preserves the selected management components. The installer verifies the current managed installation, target checksum, program versions and candidate configuration before stopping anything. It displays the source and target versions and asks for confirmation. Upgrading briefly interrupts forwarding. After stopping the service it backs up the previous programs, unit, exact installation record, configuration and **complete data directory**, then switches the programs and unit together. When CLI is enabled, its client and the service program must come from the same release; Web-only mode installs the service program. Downgrades, single-program target archives, customized units and conflicting target files are rejected. A complete installation already supporting component selection at the same version is an idempotent check.
 
-The data directory itself (`/var/lib/porter`) must not be a mount point, including a bind mount: the installer rejects such an upgrade before stopping the service or changing the installation, so whole-directory rollback remains possible. Its parent directory, such as `/var`, may be on a separate filesystem.
+The data directory itself (`/var/lib/porter`) must not be a mount point, including a bind mount: the installer rejects an upgrade or component switch before stopping the service or changing the installation, so whole-directory rollback remains possible. Its parent directory, such as `/var`, may be on a separate filesystem.
 
-On failure the installer restores the matching old programs, configuration and complete data, together with the prior service state. After a forced interruption, rerun the current installer command. That run first restores a stable installation and exits; run the desired upgrade or uninstall command again after recovery succeeds.
+On failure the installer restores the matching old programs, configuration and complete data, together with the prior service state. After a forced interruption, rerun the current installer command. That run first restores a stable installation and exits; run the desired component change, upgrade or uninstall command again after recovery succeeds.
 
-Backups are kept under the program directory at `.tmp/upgrade.<id>` (by default `/opt/porter/.tmp/upgrade.<id>`); the installer prints the exact location. They contain the old programs, unit, installation record, service/CLI configuration and complete data, and may include credentials. Keep them protected: purge preserves historical upgrade backups. A rollback also retains the failed new data under the data directory’s parent at `.porter-failed-upgrade.<id>` (by default `/var/lib/.porter-failed-upgrade.<id>`). These copies may contain business data; inspect them before any manual cleanup. If recovery fails, preserve the installation record, backup and any recovery directories reported in the error; do not overwrite them with another installation or restore a database file in isolation.
+Upgrade and component-switch backups are kept under the program directory at `.tmp/upgrade.<id>` (by default `/opt/porter/.tmp/upgrade.<id>`); the installer prints the exact location. They contain the old programs, unit, installation record, service/CLI configuration and complete data, and may include credentials. Keep them protected: purge preserves historical upgrade and component-switch backups. A rollback also retains the failed new data under the data directory’s parent at `.porter-failed-upgrade.<id>` (by default `/var/lib/.porter-failed-upgrade.<id>`). These copies may contain business data; inspect them before any manual cleanup. If recovery fails, preserve the installation record, backup and any recovery directories reported in the error; do not overwrite them with another installation or restore a database file in isolation.
 
 Ordinary reruns of a legacy installation preserve its original version and service layout, without claiming that a separate CLI has been installed. **v0.2.0 has no rule CLI**: running its `porter rules` may report missing `PORTER_ADMIN_USERNAME` and `PORTER_ADMIN_PASSWORD`. Check `/opt/porter/porter --version` and upgrade after the split-program Release is available; exporting Web credentials is not the fix.
 
-For a manual installation or custom unit, stop the service and save the complete data directory, configuration, unit and old programs first. Verify the downloaded archive using `SHA256SUMS`, install both `porter` and `porterd`, and change the unit's `ExecStart` from the old `porter` to `porterd` before starting it. The managed installer refuses to take over customized units. Do not manually edit its installation record to bypass this check. Verify login, health and real TCP/UDP traffic. Rollback must restore the older programs with their matching **complete configuration and data backup**, not just replace one binary. Native backups are separate from Docker volume backups below.
+For a manual installation or custom unit, stop the service and save the complete data directory, configuration, unit and old programs first. Verify the downloaded archive using `SHA256SUMS`, install `porterd` and, if using CLI, `porter`, and change the unit's `ExecStart` from the old `porter` to `porterd` before starting it. The managed installer refuses to take over customized units. Do not manually edit its installation record to bypass this check. Verify the enabled management entries and real TCP/UDP traffic. Rollback must restore the older programs with their matching **complete configuration and data backup**, not just replace one binary. Native backups are separate from Docker volume backups below.
 
 ### Native rule commands
 
-`porterd` runs the service; `porter` is a separate command-line client. The installer exposes `porter` on the system PATH, including for the default and custom installation directories. Use it as root or through `sudo` to manage rules with administrator privileges, without entering Web credentials. The service must be running for rule operations; commands use its local Unix socket and changes appear immediately in the Web panel. These commands support native Linux only: Docker images contain only `/porterd`, with local control disabled at build time. Native clients also reject rule management in detected container environments. Use the Web panel for Docker deployments; commands hard-coding the previous Docker `/porter` path must switch to `/porterd` for service operations.
+`porterd` runs the service; `porter` is a separate command-line client. When CLI is selected, the installer exposes `porter` on the system PATH, including for the default and custom installation directories. For a Web-only installation, rerun the installer to enable CLI first. Use it as root or through `sudo` to manage rules with administrator privileges, without entering Web credentials. The service must be running for rule operations; commands use its local Unix socket, and changes also appear in the Web panel when Web is enabled. These commands support native Linux only: Docker images contain only `/porterd`, with local control disabled at build time. Native clients also reject rule management in detected container environments. Use the Web panel for Docker deployments; commands hard-coding the previous Docker `/porter` path must switch to `/porterd` for service operations.
 
 Open the interactive menu:
 
@@ -149,9 +167,9 @@ Replace `RULE_ID` with the stable ID returned by create or list. Protocol values
 
 Common options `--lang zh-CN|en`, `--socket PATH`, `--json` and `--help` can appear before or after the action; `--lang=en` is also accepted. Use `--enabled=false` or `--traffic-enabled=false` to switch a field off; boolean field options require the equals form. `--json` is for single parameter operations: results go to standard output, errors to standard error, with stable JSON field names and error codes. Byte counters remain exact decimal strings. Exit codes are `0` for success, `1` for operation failure and `2` for usage errors. For help without a running service, use `porter rules --help --lang en`; `porter --version` remains unchanged.
 
-Administrators can manage all rules. Creation with `--owner-id USER_ID` assigns an existing user; that user's allocated ports and quota still apply. Use the existing user ID from the authenticated Web admin API (`GET /api/admin/users`, `user.id` in each account). Rule updates preserve ownership. The CLI manages rules only; user, plan, port-pool, retry and counter-reset administration remains in the Web panel. Updates and deletions check revisions and fail on concurrent changes; reload before retrying. Scripts can pin a previously observed revision with `--revision N`. After a timeout, inspect the result before resubmitting a change.
+Administrators can manage all rules. Creation with `--owner-id USER_ID` assigns an existing user; that user's allocated ports and quota still apply. Use the existing user ID from the authenticated Web admin API (`GET /api/admin/users`, `user.id` in each account). Rule updates preserve ownership. The CLI manages rules only; enable Web to administer users, plans, port pools, retries and counter resets. Existing user-owned rules and quotas continue to work when Web is disabled. Updates and deletions check revisions and fail on concurrent changes; reload before retrying. Scripts can pin a previously observed revision with `--revision N`. After a timeout, inspect the result before resubmitting a change.
 
-The installed service uses `/var/lib/porter/porter-control.sock` by default. The socket accepts only actual root peers and is not exposed on the Web port. Service startup creates it beside the database, unless `PORTER_CONTROL_SOCKET` sets another path. The CLI chooses `--socket`, then `PORTER_CONTROL_SOCKET`, then `/var/lib/porter/porter-control.sock`. The parent directory and every ancestor must belong to root or the service user, must not be writable by group or other users, and must not be symbolic links. A directory owned by another user is rejected even if currently read-only, since its owner can change its permissions. The system command also works with custom program directories. For a manually started service or a custom database directory, pass the matching socket explicitly:
+The installed service uses `/var/lib/porter/porter-control.sock` by default. The socket accepts only actual root peers and is not exposed on the Web port. With CLI enabled, service startup creates it beside the database, unless `PORTER_CONTROL_SOCKET` sets another path. Web-only mode does not create it. The CLI chooses `--socket`, then `PORTER_CONTROL_SOCKET`, then `/var/lib/porter/porter-control.sock`. The parent directory and every ancestor must belong to root or the service user, must not be writable by group or other users, and must not be symbolic links. A directory owned by another user is rejected even if currently read-only, since its owner can change its permissions. The system command also works with custom program directories. For a manually started service or a custom database directory, pass the matching socket explicitly:
 
 ```bash
 sudo porter rules list --lang en --socket /custom/data/porter-control.sock
@@ -161,7 +179,7 @@ A connection failure means you should check service status, the socket path and 
 
 ### Manual Compose deployment
 
-Use native Linux Docker Engine and Docker Compose v2. The deployment uses host networking so newly added forwarding ports need no Compose changes.
+Use native Linux Docker Engine and Docker Compose v2. Docker provides Web management only; it contains no CLI client or local control socket. Keep Web enabled for this deployment. The deployment uses host networking so newly added forwarding ports need no Compose changes.
 
 **The image address below is the planned release location. Before the first successful release and public GHCR package configuration, the image may not be available.** Build from source using the instructions below in that case.
 
@@ -207,14 +225,16 @@ The container runs as UID 0 with all capabilities dropped except `NET_BIND_SERVI
 
 ## Configuration
 
-The following table lists all Porter runtime environment variables. Optional variables use their defaults when unset or set to an empty string. Both administrator variables are required: an empty or whitespace-only username or password prevents startup; surrounding whitespace is trimmed from the username. Invalid boolean, address, integer, or duration formats and out-of-range values prevent startup.
+The following table lists all Porter runtime environment variables. Optional variables use their defaults when unset or set to an empty string. With Web enabled, both administrator variables are required: an empty or whitespace-only username or password prevents startup; surrounding whitespace is trimmed from the username. Web-disabled native services ignore Web credentials, the HTTP address and the cookie setting, and open no Web listener. At least one usable management entry must be enabled; Docker cannot run CLI-only. Invalid component booleans or invalid active address, integer, boolean or duration settings prevent startup, as do out-of-range values. For managed native installations, change the component selection through the installer so programs, configuration and the installation record stay consistent.
 
 To customize any other variable, add it under the service's `environment` in `compose.yaml`, for example `PORTER_UDP_IDLE_TIMEOUT: "2m"`. The adjacent `.env` file supplies values for Compose substitution; placing a variable there alone does not pass it into the container. After changing environment settings, run `docker compose up -d --force-recreate` to apply them. Recreating the container interrupts all forwarding sessions and expires existing login sessions.
 
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
-| `PORTER_ADMIN_USERNAME` | Required; no default | Administrator username. |
-| `PORTER_ADMIN_PASSWORD` | Required; no default | Administrator password. |
+| `PORTER_WEB_ENABLED` | `true` | Enable the Web panel, HTTP API and health endpoint. |
+| `PORTER_CLI_ENABLED` | `true` | Enable the local control socket on native Linux. Cannot enable local control in Docker or another unsupported environment. |
+| `PORTER_ADMIN_USERNAME` | Required when Web is enabled | Administrator username. |
+| `PORTER_ADMIN_PASSWORD` | Required when Web is enabled | Administrator password. |
 | `PORTER_HTTP_ADDR` | `0.0.0.0:8080` | Explicit local IPv4/IPv6 address and port 1–65535, such as `127.0.0.1:8080` or `[::1]:8080`; hostnames are not accepted. |
 | `PORTER_DB_PATH` | `/data/porter.db` | SQLite file path; persist its entire directory. |
 | `PORTER_CONTROL_SOCKET` | `porter-control.sock` beside the database | Native Linux service control socket path; the CLI defaults to `/var/lib/porter/porter-control.sock` unless this variable or `--socket` is set. Ignored by Docker builds, which disable local rule management. |
@@ -229,11 +249,11 @@ Rules accept individual ports from 1 to 65535. TCP and UDP can share the same nu
 
 Choose **TCP+UDP** to manage both protocols as one rule with one name, revision, enabled state, listen IP/port, and destination host/port. Both protocols use the same numeric destination port; the destination must provide the intended TCP and UDP services there. The rule counts once and shares its session allowance across TCP connections and UDP sessions. Enable, disable, retry, edit, and delete affect both protocols together. A conflict on either listen port fails the entire operation and preserves the existing configuration and sessions. A combined rule is running only while both listeners are ready; if one fails, the other is stopped and the whole rule reports an error. TCP and UDP filters include combined rules, while the TCP+UDP filter shows only combined rules. Existing separate TCP and UDP rules remain separate and are not automatically merged.
 
-Logs go to standard output. `/healthz` reports process and database readiness. SQLite stores users, plans, port allocations, rules, and traffic counters. Ordinary-user passwords are stored only as salted password derivations; administrator passwords and login sessions are not persisted. Browser login sessions expire after 12 hours or a process restart.
+Logs go to standard output. With Web enabled, `/healthz` reports process and database readiness. CLI-only installations can check access with `sudo porter rules list --lang en`. SQLite stores users, plans, port allocations, rules, and traffic counters. Ordinary-user passwords are stored only as salted password derivations; administrator passwords and login sessions are not persisted. Browser login sessions expire after 12 hours or a process restart.
 
 ## Users, plans, and separate portals
 
-The admin portal `/admin/` and user portal `/user/` share one server while keeping their entry points, login flows, navigation, cookies, and CSRF state separate. Both can be signed in within one browser; signing out of one does not sign out of the other. Administrators see all rule owners, filter by user, and directly create, edit, enable, disable, delete, retry, and reset display counters for any user’s rules. Ordinary users can access only their own resources.
+When Web is enabled, the admin portal `/admin/` and user portal `/user/` share one server while keeping their entry points, login flows, navigation, cookies, and CSRF state separate. Both can be signed in within one browser; signing out of one does not sign out of the other. Administrators see all rule owners, filter by user, and directly create, edit, enable, disable, delete, retry, and reset display counters for any user’s rules. Ordinary users can access only their own resources.
 
 Configure a user port pool, create a plan with a port count and traffic allowance in GiB, then create a user with that plan. A user receives an exclusive contiguous numeric port segment, shared across TCP, UDP, and listen IPs; destination ports remain unrestricted. Allocation excludes management and existing administrator rule ports. Insufficient contiguous space fails the entire user creation. Changing the pool affects only later allocations. Administrator-owned rules have no plan quota but cannot occupy already assigned user ports; administrator actions on user-owned rules respect the owner’s port and quota limits.
 
@@ -292,6 +312,8 @@ export PORTER_ADMIN_PASSWORD
 export PORTER_DB_PATH="$PWD/data/porter.db"
 ./.tmp/porterd
 ```
+
+For CLI-only manual startup, set `PORTER_WEB_ENABLED=false` and `PORTER_CLI_ENABLED=true` and omit the Web username and password exports above. For Web-only startup, set `PORTER_CLI_ENABLED=false`. `porterd --check-config` validates the current configuration and available management entries without opening the database or any listener. It does not check port availability.
 
 For a release archive, use `./porterd` instead. Use `sudo ./.tmp/porter rules --lang en --socket "$PWD/data/porter-control.sock"` for the source-built client, or `sudo ./porter rules ...` from an extracted archive. Native control requires the trusted directory ownership described above. Download `SHA256SUMS` alongside the archive and verify it with `sha256sum --ignore-missing -c SHA256SUMS`. Both programs in a release archive have the same version. A normal user can bind high ports; low ports require suitable service privileges or `CAP_NET_BIND_SERVICE`. Use a service supervisor for automatic restarts; a manual unit must start `porterd`.
 

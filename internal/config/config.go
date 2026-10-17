@@ -10,6 +10,8 @@ import (
 )
 
 type Config struct {
+	WebEnabled           bool
+	CLIEnabled           bool
 	Username             string
 	Password             string
 	HTTPAddr             string
@@ -23,20 +25,34 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	c := Config{Username: strings.TrimSpace(os.Getenv("PORTER_ADMIN_USERNAME")), Password: os.Getenv("PORTER_ADMIN_PASSWORD"), HTTPAddr: value("PORTER_HTTP_ADDR", "0.0.0.0:8080"), DBPath: value("PORTER_DB_PATH", "/data/porter.db")}
-	if c.Username == "" || strings.TrimSpace(c.Password) == "" {
-		return c, fmt.Errorf("必须设置 PORTER_ADMIN_USERNAME 和 PORTER_ADMIN_PASSWORD")
-	}
-	host, port, addrErr := net.SplitHostPort(c.HTTPAddr)
-	if addrErr != nil || net.ParseIP(host) == nil {
-		return c, fmt.Errorf("PORTER_HTTP_ADDR 必须是有效的 IP:端口")
-	}
-	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
-		return c, fmt.Errorf("PORTER_HTTP_ADDR 端口范围为 1–65535")
-	}
+	c := Config{DBPath: value("PORTER_DB_PATH", "/data/porter.db")}
 	var err error
-	if c.CookieSecure, err = strconv.ParseBool(value("PORTER_COOKIE_SECURE", "false")); err != nil {
-		return c, fmt.Errorf("PORTER_COOKIE_SECURE 必须是布尔值")
+	if c.WebEnabled, err = boolean("PORTER_WEB_ENABLED", true); err != nil {
+		return c, err
+	}
+	if c.CLIEnabled, err = boolean("PORTER_CLI_ENABLED", true); err != nil {
+		return c, err
+	}
+	if !c.WebEnabled && !c.CLIEnabled {
+		return c, fmt.Errorf("Web 和命令行管理至少启用一种")
+	}
+	if c.WebEnabled {
+		c.Username = strings.TrimSpace(os.Getenv("PORTER_ADMIN_USERNAME"))
+		c.Password = os.Getenv("PORTER_ADMIN_PASSWORD")
+		c.HTTPAddr = value("PORTER_HTTP_ADDR", "0.0.0.0:8080")
+		if c.Username == "" || strings.TrimSpace(c.Password) == "" {
+			return c, fmt.Errorf("必须设置 PORTER_ADMIN_USERNAME 和 PORTER_ADMIN_PASSWORD")
+		}
+		host, port, addrErr := net.SplitHostPort(c.HTTPAddr)
+		if addrErr != nil || net.ParseIP(host) == nil {
+			return c, fmt.Errorf("PORTER_HTTP_ADDR 必须是有效的 IP:端口")
+		}
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return c, fmt.Errorf("PORTER_HTTP_ADDR 端口范围为 1–65535")
+		}
+		if c.CookieSecure, err = boolean("PORTER_COOKIE_SECURE", false); err != nil {
+			return c, err
+		}
 	}
 	if c.MaxSessions, err = positive("PORTER_MAX_SESSIONS", 4096); err != nil {
 		return c, err
@@ -75,4 +91,12 @@ func duration(key, fallback string) (time.Duration, error) {
 		return 0, fmt.Errorf("%s 必须是 1ms–24h 的有效时长", key)
 	}
 	return d, nil
+}
+
+func boolean(key string, fallback bool) (bool, error) {
+	v, err := strconv.ParseBool(value(key, strconv.FormatBool(fallback)))
+	if err != nil {
+		return false, fmt.Errorf("%s 必须是布尔值", key)
+	}
+	return v, nil
 }

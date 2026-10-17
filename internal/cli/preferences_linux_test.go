@@ -286,3 +286,98 @@ func TestPreferenceModeRemains0600WithRestrictiveUmask(t *testing.T) {
 		t.Fatal("配置权限受umask破坏", st, err)
 	}
 }
+
+func TestPreferenceSchema3StatePermissions(t *testing.T) {
+	for _, test := range []struct {
+		name, state string
+		allowed     bool
+	}{
+		{"旧schema1", `{"schema":1,"status":"initializing"}`, true},
+		{"旧schema2", `{"schema":2,"status":"complete"}`, true},
+		{"纯CLI", `{"schema":3,"status":"complete","features":{"web":false,"cli":true}}`, true},
+		{"双入口", `{"schema":3,"status":"complete","features":{"web":true,"cli":true}}`, true},
+		{"仅Web", `{"schema":3,"status":"complete","features":{"web":true,"cli":false}}`, false},
+		{"全关", `{"schema":3,"status":"complete","features":{"web":false,"cli":false}}`, false},
+		{"无组件", `{"schema":3,"status":"complete"}`, false},
+		{"缺Web", `{"schema":3,"status":"complete","features":{"cli":true}}`, false},
+		{"缺CLI", `{"schema":3,"status":"complete","features":{"web":true}}`, false},
+		{"组件空值", `{"schema":3,"status":"complete","features":null}`, false},
+		{"组件数组", `{"schema":3,"status":"complete","features":[false,true]}`, false},
+		{"Web空值", `{"schema":3,"status":"complete","features":{"web":null,"cli":true}}`, false},
+		{"CLI空值", `{"schema":3,"status":"complete","features":{"web":false,"cli":null}}`, false},
+		{"CLI字符串", `{"schema":3,"status":"complete","features":{"web":false,"cli":"true"}}`, false},
+		{"Web数字", `{"schema":3,"status":"complete","features":{"web":1,"cli":true}}`, false},
+		{"重复组件", `{"schema":3,"status":"complete","features":{"web":false,"cli":false,"cli":true}}`, false},
+		{"未知组件", `{"schema":3,"status":"complete","features":{"web":false,"cli":true,"other":true}}`, false},
+		{"初始化", `{"schema":3,"status":"initializing","features":{"web":false,"cli":true}}`, false},
+		{"升级中", `{"schema":3,"status":"upgrading","features":{"web":false,"cli":true}}`, false},
+		{"切换中", `{"schema":3,"status":"reconfiguring","features":{"web":false,"cli":true}}`, false},
+		{"卸载中", `{"schema":3,"status":"uninstalling","features":{"web":false,"cli":true}}`, false},
+		{"已卸载", `{"schema":3,"status":"uninstalled","features":{"web":false,"cli":true}}`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := stateAllowsPreferences([]byte(test.state)); got != test.allowed {
+				t.Fatalf("保存许可=%v，预期%v", got, test.allowed)
+			}
+			p, dir := preferenceFixture(t)
+			writePreferenceTestFile(t, filepath.Join(dir, "install.json"), test.state)
+			if language, err := p.Read(); language != "" || err != nil {
+				t.Fatal(language, err)
+			}
+			language, err := p.Save(context.Background(), "en", false)
+			if !test.allowed {
+				if err == nil {
+					t.Fatal("不稳定或禁用CLI的安装仍可首次保存")
+				}
+				if _, err := os.Stat(filepath.Join(dir, "cli.json")); !os.IsNotExist(err) {
+					t.Fatal("拒绝后仍创建偏好", err)
+				}
+				writePreferenceTestFile(t, filepath.Join(dir, "cli.json"), `{"schema":1,"language":"en"}`)
+				if _, err := p.Save(context.Background(), "zh-CN", true); err == nil {
+					t.Fatal("禁用CLI或不稳定安装仍可覆盖偏好")
+				}
+				if got, err := p.Read(); err != nil || got != "en" {
+					t.Fatal("拒绝后原偏好改变", got, err)
+				}
+				return
+			}
+			if err != nil || language != "en" {
+				t.Fatal("首次保存失败", language, err)
+			}
+			next := &preferenceFiles{root: p.root}
+			if got, err := next.Read(); err != nil || got != "en" {
+				t.Fatal("后续读取失败", got, err)
+			}
+			if got, err := next.Save(context.Background(), "zh-CN", true); err != nil || got != "zh-CN" {
+				t.Fatal("切换保存失败", got, err)
+			}
+		})
+	}
+}
+
+func TestPreferenceSchema3InstallChangesRefuseSave(t *testing.T) {
+	initial := `{"schema":3,"status":"complete","features":{"web":false,"cli":true}}`
+	for _, state := range []string{
+		`{"schema":3,"status":"complete","features":{"web":true,"cli":false}}`,
+		`{"schema":3,"status":"complete","features":{"web":true,"cli":true}}`,
+		`{"schema":3,"status":"upgrading","features":{"web":false,"cli":true},"operation":"reconfigure"}`,
+		`{"schema":3,"status":"uninstalling","features":{"web":false,"cli":true}}`,
+	} {
+		t.Run(state, func(t *testing.T) {
+			p, dir := preferenceFixture(t)
+			path := filepath.Join(dir, "install.json")
+			writePreferenceTestFile(t, path, initial)
+			writePreferenceTestFile(t, filepath.Join(dir, "cli.json"), `{"schema":1,"language":"en"}`)
+			if _, err := p.Read(); err != nil {
+				t.Fatal(err)
+			}
+			writePreferenceTestFile(t, path, state)
+			if _, err := p.Save(context.Background(), "zh-CN", true); err == nil {
+				t.Fatal("交互期间安装组合/状态变化后仍可保存")
+			}
+			if got, err := p.Read(); err != nil || got != "en" {
+				t.Fatal("拒绝后原偏好改变", got, err)
+			}
+		})
+	}
+}
