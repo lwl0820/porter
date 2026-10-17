@@ -5,26 +5,28 @@
 
 修改 `scripts/install.sh`、README 一键入口、安装器验证、GitHub 发行包或 systemd 集成时适用。安装器下载原生程序，不安装或调用 Docker。现有手工 Docker 部署与镜像发布保持独立。
 
+三模式安装与切换新增合同见 [Web与CLI组件选择](optional-management-contracts.md)，它扩展本文schema1/2的兼容并覆盖无条件要求Web/双程序的旧行为。路径、锁、备份、归属和卸载保护继续适用。
+
 ## 10.2 命令签名
 
 `bash scripts/install.sh [--install-dir /opt/porter] [--version v1.0.0] [--lang zh-CN|en]` 默认安装；`--upgrade [--version v1.0.0]` 显式升级或将旧单程序迁移为双程序；`--uninstall [--purge]` 卸载，purge 不可独用，卸载拒绝 version/upgrade。`--help` 按语言输出，不要求权限、宿主检测或终端，lang 位置无关。远程入口 `curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install.sh | bash`，传参用 `bash -s -- --lang en`。宿主操作用 root/sudo。默认最新正式 Release，显式版本允许已发布预发行版。
 
 ## 10.3 输入、文件及服务契约
 
-- 首次通过 `/dev/tty` 输入管理员用户名、隐藏密码、密码确认、完整 Web 监听地址，不从脚本管道读取，不生成默认密码。先关闭终端回显再显示密码提示，EOF、INT、TERM 和正常退出均恢复回显。
+- Web启用时通过 `/dev/tty` 输入管理员用户名、隐藏密码、密码确认、完整 Web 监听地址，不从脚本管道读取，不生成默认密码。先关闭终端回显再显示密码提示，EOF、INT、TERM 和正常退出均恢复回显。
 - 安装器未指定 lang 时显示1English/2中文，回车或无终端默认英文。自有帮助、提示、校验、确认和结果均翻译，外部命令诊断除外。集中消息用参数插值，所有交互读控制终端；CLI独立的首次语言保存见 cli-contracts.md，安装器不得预填或覆盖该偏好。
 - 用户名去除首尾空白，密码保留原始值但不能全为空白；监听为显式 IPv4:端口或 [IPv6]:端口，范围 1–65535。通配监听通过同族回环地址检查健康，禁止固定使用 8080。
 - 目标 Ubuntu 22.04/24.04、Debian 12/13、RHEL/Rocky/AlmaLinux 9/10，架构 amd64/arm64；要求 systemd 为 PID 1。必要 Python 3、curl 和 CA 依赖通过系统 apt/dnf 补齐，不安装编译工具或 Docker，不自动卸载软件包。
-- GitHub API 获取正式 latest 或指定 tag；精确选择 `porter-${version}-linux-${arch}.tar.gz` 与 `SHA256SUMS`。校验唯一的对应 SHA256 项，新装/升级仅读取压缩包中名为 `porter`、`porterd` 的唯一普通文件，不抽取任意路径/链接；分别执行暂存程序 `--version` 核对同一发布版本。仅旧schema=1同版本恢复可接受单个porter成员。
+- GitHub API 获取正式 latest 或指定 tag；精确选择 `porter-${version}-linux-${arch}.tar.gz` 与 `SHA256SUMS`。校验唯一的对应 SHA256 项，新装/升级按组件读取压缩包中名为 `porter`、`porterd` 的唯一普通文件，不抽取任意路径/链接；分别执行暂存程序 `--version` 核对同一发布版本。仅旧schema=1同版本恢复可接受单个porter成员。
 - 默认服务 `/opt/porter/porterd`、客户端 `/opt/porter/porter`（目录可指定）、服务配置 `/etc/porter/porter.env`、CLI配置 `/etc/porter/cli.json`、数据 `/var/lib/porter`、unit `/etc/systemd/system/porter.service`。配置与安装状态权限600，数据目录700，程序755；新unit启动porterd，旧布局仍启动旧porter。
 - 环境文件逐项使用双引号，编码反斜线、双引号、反引号和美元符号；生产只通过标准输入和受限解析读取，禁止 shell source，禁止 Compose 的 `$$` 替换。文件内的 `PORTER_DB_PATH` 固定为 `/var/lib/porter/porter.db`。
 - `porter.service` 使用专用禁止登录的系统用户/组 porter、`Restart=on-failure`、开机自启。`AmbientCapabilities` 和 `CapabilityBoundingSet` 仅提供 `CAP_NET_BIND_SERVICE`，配合 `NoNewPrivileges`、`ProtectSystem=strict`、`StateDirectory=porter` 允许完整数据库目录写入。
 - unit 按各字段语法编码：`EnvironmentFile=/etc/porter/porter.env` 不包外层引号，避免指令被忽略；ExecStart 冒号禁用变量展开，百分号写 `%%`。目录拒绝控制字符/引号/反斜线，空格/美元符/百分号须验证。FragmentPath 禁止覆盖 vendor 同名服务。
-- `/etc/porter/install.json`：兼容schema=1旧单程序记录，新schema=2描述split布局、directory、arch、version、status及受限command_link归属；状态含initializing/complete/uninstalling/uninstalled与显式升级恢复状态。目录/全局锁仅释放本进程取得者；暂存仅安装目录.tmp。状态/凭据/unit在目标目录受限.new写完再原子改名。产物校验后才记initializing；普通重试复用配置/程序/数据及原版本布局，不隐式升级。CLI保存使用同一全局.install-lock并重校安装快照。
+- `/etc/porter/install.json`：兼容schema=1旧单程序和schema=2双程序记录；新schema=3在split布局、directory、arch、version、status及受限command_link之外增加严格features组件选择（见组件合同）；状态含initializing/complete/uninstalling/uninstalled与显式升级恢复状态。目录/全局锁仅释放本进程取得者；暂存仅安装目录.tmp。状态/凭据/unit在目标目录受限.new写完再原子改名。产物校验后才记initializing；普通重试复用配置/程序/数据及原版本布局，不隐式升级。CLI保存使用同一全局.install-lock并重校安装快照。
 - 已托管安装取得全局锁后重新校验 directory/arch/version/status，记录变化、消失或无效即拒绝重跑，避免沿用已卸载快照。FragmentPath/DropInPaths 查询必须检查退出码，失败不能视为空。
-- 已有完整安装须在锁内核对实际程序版本与记录一致（split布局核对两者），缺失关键文件、数据目录或 `porter.db` 时拒绝继续，不能自动创建空库冒充恢复；目录/架构不匹配、未知账号/配置/unit/数据库或符号链接等也明确拒绝接管。已托管用户校验 home、nologin 与主组，不能把未知普通用户变为服务用户。
+- 已有完整安装须在锁内核对实际程序版本与记录一致（split布局按组件核对所需程序），缺失关键文件、数据目录或 `porter.db` 时拒绝继续，不能自动创建空库冒充恢复；目录/架构不匹配、未知账号/配置/unit/数据库或符号链接等也明确拒绝接管。已托管用户校验 home、nologin 与主组，不能把未知普通用户变为服务用户。
 - 系统命令固定 `/usr/bin/porter`，绝对链接指向托管客户端；程序直接安装/usr/bin时使用本体而非自链接。不改PATH/profile/sudoers，不认领未知同目标链接，不覆盖悬空或其他节点；先记录受限管理意图，再非强制原子创建，锁内重校归属。缺失已托管链接可幂等补齐，不能把缺失完整程序伪装为链接修复。
-- 就绪需 unit 已启用且运行，所选地址 `/healthz` 返回 `{"status":"ok"}`，探测后再次确认运行。分别输出实际版本、布局、`/user/`、`/admin/`、配置/数据/双程序位置、系统CLI及systemctl/journalctl命令；旧布局明确提示显式升级方法，不执行rules探测而启动旧服务。根地址进入用户端，失败不得报就绪。
+- 新装就绪需 unit 已启用且运行；Web所选地址 `/healthz` 返回 `{"status":"ok"}`，CLI按组件合同执行root Unix只读查询，探测后再次确认运行。按所选组件输出实际版本、布局、可用Web入口、配置/数据/所需程序位置、可用系统CLI及systemctl/journalctl命令；旧布局明确提示显式升级方法，不执行rules探测而启动旧服务。根地址进入用户端，失败不得报就绪。
 - 卸载从记录识别自定义目录，显式目录须匹配；拒绝未知 FragmentPath/drop-in、不匹配 unit/账号及含中间路径的符号链接。无需网络、下载、补装依赖或凭据输入。控制终端列出删除/保留资源后输入 `yes`，purge 另输入 `DELETE`；默认取消，全部确认先于状态写入和停服。
 - 卸载写 uninstalling，停服、禁用并确认不活跃后删除托管 unit/程序，再 reload；失败停止，保留恢复信息。默认保留服务/CLI正式配置、完整数据、权限600记录及服务账号/组，写uninstalled；purge清理两种配置、完整数据及账号/组，安装记录最后删；普通及purge均精确删除托管CLI入口，未知替换在停服前拒绝。额外文件、共享 journal、系统包和 Docker 资源保留，程序目录仅空时删除。
 - 预检现存配置/数据库为普通文件、数据为目录；两种卸载均核验并精确清理 `$CONFIG.new`、`$STATE.new`、`$UNIT.new`、`$INSTALL_DIR/.porter.new`、split布局的`.porterd.new`及可确认归属的CLI配置暂存，拒绝类型冲突及链接。禁止递归清理程序目录或任意 `.tmp`；README 须说明强制中断后的历史 `.tmp/install.XXXXXXXX` 可能含配置/凭据副本，保留并需人工核对。
@@ -79,7 +81,7 @@
 
 - 签名：`--upgrade [--version TAG]`，必须已有可信托管安装；无version选择最新正式Release，有version精确选择已发布目标。普通安装不把--version解释成升级，显式升级不接受低于当前SemVer的版本或只有旧porter成员的包。已拆分同版本为幂等检查，不重复停服。
 - schema=1旧布局普通重跑/卸载恢复保持原版本，不能直接以新CLI覆盖旧服务路径。显式迁移成套切换客户端porter、服务porterd与unit ExecStart；不更改业务账号、规则、统计及服务配置语义。
-- 下载、唯一摘要、两程序真实版本、资源类型/归属、原unit和账号、CLI配置/系统入口冲突的验证先于停服。DATA本身必须可整体替换：从/proc/self/mountinfo精确识别挂载根（含同文件系统bind mount，解码内核路径转义），预检及锁内重检发现DATA自身是挂载根则停服前拒绝；DATA父目录或/var单独挂载不受此限制。不能仅用os.path.ismount或st_dev判断，二者会漏同fs bind mount。终端展示目标、备份位置和停机影响，确认后持两把锁重新验证快照；取消不修改程序、配置、状态或业务数据。
+- 下载、唯一摘要、两程序真实版本、资源类型/归属、原unit和账号、CLI配置/系统入口冲突的验证先于停服。DATA本身必须可整体替换：从/proc/self/mountinfo精确识别挂载根（含同文件系统bind mount，解码内核路径转义），预检及锁内重检发现DATA自身是挂载根则停服前拒绝；升级和组件切换取双锁check_managed后都要显式data-check给具体双语诊断，不能只依赖事务入口泛化错误兜底；DATA父目录或/var单独挂载不受此限制。不能仅用os.path.ismount或st_dev判断，二者会漏同fs bind mount。终端展示目标、备份位置和停机影响，确认后持两把锁重新验证快照；取消不修改程序、配置、状态或业务数据。
 - 持久升级记录使用status=upgrading和受限upgrade_id；工作目录为安装目录`.tmp/upgrade.<32hex>`，transaction.json记录prepared/stopped/backup_complete/switching/restoring/restored。路径必须从验证后的安装目录与受限标识推导，不能信任JSON指定任意删除/恢复路径。
 - 备份保存原install.json精确字节、原程序、unit、服务/CLI配置与完整数据目录；先停止服务并确认inactive，保留UID/GID、mode与内容，目录0700、含配置的归档/文件0600。仅copy2/copytree不等于保留属主，必须显式验证恢复后服务用户仍能访问。
 - 备份完成标记必须先于程序/unit/入口切换。新程序健康后才提交complete，并保留原active/enabled意图；原本停止的实例只临时启动验收后再停止。旧数据文件与新目录不能合并回退。

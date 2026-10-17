@@ -1,0 +1,53 @@
+{
+  "id": "cli-only-mode",
+  "name": "cli-only-mode",
+  "title": "支持按需安装Web与命令行",
+  "description": "交互安装分别选择Web及CLI，至少启用一项，默认两者均启用；仅CLI免Web凭据和地址配置，仅Web不部署CLI及其入口，完整兼容安装生命周期。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "lwl0820",
+  "assignee": "lwl0820",
+  "createdAt": "2026-10-18",
+  "completedAt": null,
+  "branch": "codex/optional-web-cli",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": "1bb460939ed59c4194c9e83cfd95aa6cc4dc1c3a",
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "cmd/porterd/main.go",
+    "internal/config/config.go",
+    "internal/store/accounts.go",
+    "internal/rules",
+    "internal/localapi",
+    "scripts/install.sh",
+    "scripts/test-install.py",
+    "README.md",
+    "README.zh-CN.md",
+    "cmd/porterd/main_test.go",
+    "internal/config/config_test.go",
+    "scripts/check-build-boundaries.py",
+    "internal/cli/preferences_linux.go",
+    "internal/cli/preferences_linux_test.go"
+  ],
+  "notes": "功能、语言偏好、三模式安装及六方向切换完成；服务和安装独立检查放行。完整70项阶段69过/1诊断失败已修，最终挂载4场景和10项影响增量、真实Bash主联动复验通过；证据见research。待本轮精确提交归档、main合并与v0.5.0推送后持续观察最终远端全套CI/Release。\n产品提交1bb4609已完成。规范与任务记录随后同批提交，归档与会话记录后合并推送v0.5.0。发布成功需由当前会话继续确认，不从本地测试推断。",
+  "meta": {
+    "confirmed_default": "Web与CLI均启用",
+    "valid_modes": [
+      "web+cli",
+      "web",
+      "cli"
+    ],
+    "reconfigure_after_install": true,
+    "plan_review": "用户已明确确认最终方案并授权实施、提交、合并main、删除开发分支及tag推送",
+    "release_target": "v0.5.0",
+    "release_tag": "v0.5.0",
+    "release_authorization": "用户明确批准最终方案，并授权完成后提交、合并主分支、删除开发分支、打tag推送。"
+  }
+}

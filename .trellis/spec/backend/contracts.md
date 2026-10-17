@@ -2,11 +2,11 @@
 
 ## 1. 范围与触发条件
 
-适用于修改 Go 管理接口、规则运行态、SQLite、环境变量和容器集成。实际入口为 `cmd/porter/main.go`，边界模型由 `internal/model/rule.go` 维护；以真实代码和测试为依据。
+适用于修改 Go 管理接口、规则运行态、SQLite、环境变量和容器集成。实际服务入口为 `cmd/porterd/main.go`，边界模型由 `internal/model/rule.go` 维护；以真实代码和测试为依据。
 
 ## 2. 签名
 
-- `config.Load() (Config, error)`：必填管理员环境变量，显式管理 IP 与端口。
+- `config.Load() (Config, error)`：按Web/CLI组件配置校验；Web启用时必填管理员环境变量及有效管理IP端口，组件合同见 [可选管理入口](optional-management-contracts.md)。
 - `store.Open(path string) (*Store, error)`：取得 `.lock` 排他锁、迁移后返回，不能多实例共享数据库。
 - `rules.Service.Save(ctx, id, revision, input)`：创建时 id 为空，更新要求当前 revision。
 - `model.Transports(protocol) []string`：`tcp`、`udp` 映射单个传输，`tcp+udp` 映射两个传输，未知值返回 nil；冲突使用传输集合交集。
@@ -23,7 +23,7 @@
 
 `GET /api/admin/rules` 和 `/api/user/rules` 返回 `{rules: Rule[]}`；管理端支持 `owner_id` 查询。新增返回 201，修改返回 200，删除完成后返回 204。更新、删除和重试携带 `If-Match: "<revision>"`。两端分别使用自己的 `auth/login|session|logout`，响应包含 `{user_id, username, role, csrf_token}`，其余修改请求携带本端 `X-CSRF-Token` 和同源 Origin。旧共享 `/api/auth/*`、`/api/rules*` 业务路由返回 404，不能作为兼容别名。
 
-管理员环境变量 `PORTER_ADMIN_USERNAME`、`PORTER_ADMIN_PASSWORD` 必填；`PORTER_HTTP_ADDR` 默认 `0.0.0.0:8080`，`PORTER_DB_PATH` 默认 `/data/porter.db`。管理监听按 IPv4/IPv6 显式选择 tcp4/tcp6；转发监听同样固定地址族，不能依赖系统双栈默认值。
+Web启用时管理员环境变量 `PORTER_ADMIN_USERNAME`、`PORTER_ADMIN_PASSWORD` 必填；`PORTER_HTTP_ADDR` 默认 `0.0.0.0:8080`，`PORTER_DB_PATH` 默认 `/data/porter.db`。管理监听按 IPv4/IPv6 显式选择 tcp4/tcp6；转发监听同样固定地址族，不能依赖系统双栈默认值。
 
 写操作由 Service 串行化。先准备新监听，再提交数据库，成功后切换运行态；失败必须关闭预备 socket 并保留旧配置、监听和会话。相同监听器仅修改目标时换代并取消旧会话，只改名称不得重置连接。数据库与 socket 不能被描述为同一原子事务，崩溃后以已提交配置恢复。
 
@@ -35,7 +35,7 @@
 
 | 条件 | 行为 |
 | --- | --- |
-| 缺失启动凭据、损坏数据库或未来版本数据库 | 拒绝启动，日志不能包含凭据。 |
+| Web启用时缺失凭据；任意模式数据库损坏或版本过新 | 拒绝启动，日志不能包含凭据。 |
 | 非法 JSON、未知字段、非法地址或端口 | 400，字段错误定位到表单字段。 |
 | 未登录或会话过期 | 401。 |
 | Origin 或 CSRF 无效 | 403，不执行变更。 |
@@ -160,7 +160,7 @@
 
 ### 9.3 数据、HTTP 与环境契约
 
-管理页面 /admin/，用户页面 /user/，根地址跳转管理端；独立 /api/admin/* 和 /api/user/*，共用同一进程、SQLite 与底层服务。
+管理页面 /admin/，用户页面 /user/，根地址跳转用户端；独立 /api/admin/* 和 /api/user/*，共用同一进程、SQLite 与底层服务。
 
 Cookie 为 porter_admin_session（Path=/api/admin）和 porter_user_session（Path=/api/user），CSRF、登录和退出独立。服务端校验会话所属端及角色，复制 Cookie 到另一端同样无效。双端同时登录不覆盖，登出一端不撤销另一端；全局登录限流共用。
 

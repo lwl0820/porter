@@ -14,6 +14,8 @@
 - `porter` 或 `porter rules` 进入交互菜单；`porter rules add|list|get|update|delete` 为单次参数操作。`porterd` 无参数启动服务；两者 `--version` 保持独立版本查询，不读写语言配置。
 - `internal/controlapi` 承载模型、错误与 HTTP over Unix socket 客户端，不能反向依赖 localapi/rules/store；CLI 构建依赖不得含 config/store/rules/forward/httpapi/web，服务入口不引用 internal/cli。
 
+Web/CLI可选组件、仅Web不部署客户端/控制socket、仅CLI不要求Web凭据以及安装后切换，见 [组件选择合同](optional-management-contracts.md)。原生授权与独立客户端职责不变。
+
 ## 3. 请求、输出与环境合同
 
 ### 3.1 命令与双语
