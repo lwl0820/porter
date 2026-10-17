@@ -3,8 +3,9 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from "vue";
 import { ApiError, errorMessage, type ApiClient } from "../api";
 import { knownMessage, t, type MessageKey } from "../i18n";
 import { accountingLabels, resetLabels, type Account, type FieldErrors, type Plan, type PlanInput, type Settings } from "../types";
-import { formatBytes, gibToBytes } from "../traffic";
-import AccountOverview from "./AccountOverview.vue";
+import { formatBytes, formatUTC, gibToBytes, usagePercent } from "../traffic";
+import Modal from "./Modal.vue";
+import Icon from "./Icon.vue";
 const props = defineProps<{ page: string; api: ApiClient }>();
 const emit = defineEmits<{ changed: []; busy: [value: boolean] }>();
 const plans = ref<Plan[]>([]);
@@ -14,6 +15,13 @@ const error = ref<unknown>();
 const success = ref<MessageKey>();
 const fields = ref<FieldErrors>({});
 const loading = ref(true);
+const userDialog = ref(false);
+function openUser(): void {
+ // 打开表单时使先前轮询失效，避免迟到结果覆盖表单状态。
+ version++;
+ fields.value = {}; error.value = undefined; user.username = ""; user.password = ""; userDialog.value = true;
+}
+function closeUser(): void { if (!busy.value) { userDialog.value = false; user.password = ""; } }
 const busy = ref(false);
 const formElement = ref<HTMLFormElement>();
 const controller = new AbortController();
@@ -28,7 +36,7 @@ const selectedPlan = computed(() => plans.value.find(item => item.id === user.pl
 const pool = reactive({ port_start: 10000, port_end: 20000 });
 const pageLabels: Record<string, MessageKey> = { plans: "套餐管理", users: "用户管理", settings: "系统配置" };
 async function load(force = false): Promise<void> {
- if (disposed || busy.value || document.visibilityState === "hidden") return;
+ if (disposed || busy.value || userDialog.value || document.visibilityState === "hidden") return;
  const token = ++version;
  try {
   if (props.page === "settings") {
@@ -73,7 +81,7 @@ async function save(): Promise<void> {
   } else if (props.page === "users") {
    const result = await props.api.createUser({ ...user });
    if (disposed) return;
-   users.value.push(result); user.username = ""; user.password = ""; success.value = "用户已创建，端口已分配";
+   users.value.push(result); user.username = ""; user.password = ""; success.value = "用户已创建，端口已分配"; userDialog.value = false;
   } else if (settings.value) {
    const result = await props.api.saveSettings({ ...pool }, settings.value.revision);
    if (disposed) return;
@@ -89,6 +97,12 @@ async function save(): Promise<void> {
  await focusError();
 }
 async function focusError(): Promise<void> { await nextTick(); formElement.value?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus(); }
+function quotaText(used: string, limit: string): string {
+ const current = formatBytes(used);
+ const maximum = formatBytes(limit);
+ const unit = maximum.slice(maximum.lastIndexOf(" "));
+ return `${current.endsWith(unit) ? current.slice(0, -unit.length) : current} / ${maximum}`;
+}
 function hint(key: string): string {
  const reason = fields.value[key];
  return reason ? (knownMessage(reason) ?? t("请检查此字段")) : "";
@@ -98,39 +112,202 @@ onMounted(() => { void load(); timer = setInterval(() => { if (props.page !== "s
 onUnmounted(() => { disposed = true; version++; controller.abort(); clearInterval(timer); user.password = ""; emit("busy", false); document.removeEventListener("visibilitychange", visible); });
 </script>
 <template>
- <section class="resources-page">
-  <header class="page-heading"><h1>{{ t(pageLabels[page] ?? '系统配置') }}</h1><button class="button secondary" :disabled="busy" @click="load(true)">{{ t('刷新') }}</button></header>
-  <p v-if="error" role="alert" class="notice error">{{ errorMessage(error) }}</p>
-  <p v-if="success" role="status" class="notice subtle">{{ t(success) }}</p>
-  <p v-if="loading">{{ t('正在加载…') }}</p>
-  <form v-else ref="formElement" class="resource-form" novalidate @submit.prevent="save">
-   <fieldset :disabled="busy">
-    <template v-if="page === 'plans'">
-     <div class="field"><label for="plan-name">{{ t('套餐名称') }}</label><input id="plan-name" v-model="plan.name" required maxlength="80" :aria-invalid="Boolean(fields.name)"><p v-if="fields.name" class="field-error">{{ hint('name') }}</p></div>
-     <div class="field"><label for="port-count">{{ t('端口数量') }}</label><input id="port-count" v-model.number="plan.port_count" type="number" min="1" max="65535" required :aria-invalid="Boolean(fields.port_count)"><p v-if="fields.port_count" class="field-error">{{ hint('port_count') }}</p></div>
-     <div class="field"><label for="traffic-limit">{{ t('流量额度（GiB）') }}</label><input id="traffic-limit" v-model="gib" inputmode="decimal" required :aria-invalid="Boolean(fields.traffic_limit_bytes)"><p v-if="fields.traffic_limit_bytes" class="field-error">{{ hint('traffic_limit_bytes') }}</p></div>
-     <div class="field"><label for="accounting-mode">{{ t('流量计费') }}</label><select id="accounting-mode" v-model="plan.accounting_mode"><option v-for="(label, key) in accountingLabels" :key="key" :value="key">{{ t(label) }}</option></select></div>
-     <div class="field"><label for="reset-mode">{{ t('重置方式') }}</label><select id="reset-mode" v-model="plan.reset_mode"><option v-for="(label, key) in resetLabels" :key="key" :value="key">{{ t(label) }}</option></select></div>
-     <div v-if="plan.reset_mode === 'fixed_day'" class="field"><label for="reset-day">{{ t('每月重置日') }}</label><input id="reset-day" v-model.number="resetDay" type="number" min="1" max="31" required :aria-invalid="Boolean(fields.reset_day)"><p v-if="fields.reset_day" class="field-error">{{ hint('reset_day') }}</p></div>
-     <p class="field-hint">{{ t('统一 UTC 00:00 重置；当月无对应日期时在月末重置，后续恢复原定日期。') }}</p>
-    </template>
-    <template v-else-if="page === 'users'">
-     <div class="field"><label for="new-username">{{ t('用户名') }}</label><input id="new-username" v-model="user.username" required autocomplete="off" :aria-invalid="Boolean(fields.username)"><p v-if="fields.username" class="field-error">{{ hint('username') }}</p></div>
-     <div class="field"><label for="new-password">{{ t('密码') }}</label><input id="new-password" v-model="user.password" required type="password" autocomplete="new-password" :aria-invalid="Boolean(fields.password)"><p v-if="fields.password" class="field-error">{{ hint('password') }}</p></div>
-     <div class="field"><label for="user-plan">{{ t('选择套餐') }}</label><select id="user-plan" v-model="user.plan_id" required :aria-invalid="Boolean(fields.plan_id)"><option value="">{{ t('选择套餐') }}</option><option v-for="item in plans" :key="item.id" :value="item.id">{{ item.name }}</option></select><p v-if="fields.plan_id" class="field-error">{{ hint('plan_id') }}</p></div>
-     <p v-if="selectedPlan" class="notice subtle">{{ selectedPlan.port_count }} {{ t('个端口') }} · {{ formatBytes(selectedPlan.traffic_limit_bytes) }} · {{ t(accountingLabels[selectedPlan.accounting_mode]) }}</p>
-    </template>
+  <section class="resources-page" :class="`resources-${page}`">
+    <header class="page-heading">
+      <div>
+        <h1>{{ t(pageLabels[page] ?? '系统配置') }}</h1>
+        <p v-if="page !== 'users'">{{ t(page === 'plans' ? '管理用户可使用的套餐，设置端口数量和流量额度。' : '配置端口分配范围等系统参数。') }}</p>
+      </div>
+      <button v-if="page === 'users'" class="button primary" :disabled="busy || loading" @click="openUser">
+        <Icon name="plus" :size="19" />{{ t('添加用户') }}
+      </button>
+      <button v-else-if="page === 'plans'" class="button secondary" :disabled="busy" @click="load(true)">{{ t('刷新') }}</button>
+    </header>
+    <p v-if="error && !userDialog" role="alert" class="notice error">{{ errorMessage(error) }}</p>
+    <p v-if="success" role="status" class="notice subtle">{{ t(success) }}</p>
+    <p v-if="loading" class="loading-state">{{ t('正在加载…') }}</p>
     <template v-else>
-     <div class="field"><label for="pool-start">{{ t('分配起始端口') }}</label><input id="pool-start" v-model.number="pool.port_start" type="number" min="1" max="65535" required :aria-invalid="Boolean(fields.port_start)"><p v-if="fields.port_start" class="field-error">{{ hint('port_start') }}</p></div>
-     <div class="field"><label for="pool-end">{{ t('分配结束端口') }}</label><input id="pool-end" v-model.number="pool.port_end" type="number" :min="pool.port_start" max="65535" required :aria-invalid="Boolean(fields.port_end)"><p v-if="fields.port_end" class="field-error">{{ hint('port_end') }}</p></div>
-     <p class="field-hint">{{ t('范围变更只影响新用户，已有用户保留原端口段。') }}</p>
+      <div v-if="page === 'plans'" class="plan-list">
+        <article v-for="item in plans" :key="item.id" class="plan-card">
+          <h2>{{ item.name }}</h2>
+          <dl class="plan-facts">
+            <div>
+              <dt>{{ t('端口数量') }}</dt>
+              <dd>{{ item.port_count }} {{ t('个端口') }}</dd>
+            </div>
+            <div>
+              <dt>{{ t('流量额度（GiB）') }}</dt>
+              <dd :title="`${item.traffic_limit_bytes} B`">{{ formatBytes(item.traffic_limit_bytes) }}</dd>
+            </div>
+            <div>
+              <dt>{{ t('流量计费') }}</dt>
+              <dd>{{ t(accountingLabels[item.accounting_mode]) }}</dd>
+            </div>
+            <div>
+              <dt>{{ t('重置方式') }}</dt>
+              <dd>{{ t(resetLabels[item.reset_mode]) }}{{ item.reset_day ? ` · ${item.reset_day}` : '' }}</dd>
+            </div>
+          </dl>
+        </article>
+      </div>
+      <div v-if="page === 'users'" class="users-panel">
+        <div class="users-table-scroll" tabindex="0" :aria-label="t('用户管理')">
+          <table class="users-table">
+            <colgroup>
+              <col class="user-name-col">
+              <col class="user-plan-col">
+              <col class="user-ports-col">
+              <col class="user-usage-col">
+              <col class="user-directions-col">
+              <col class="user-accounting-col">
+              <col class="user-reset-col">
+              <col class="user-cycle-col">
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">{{ t('用户名') }}</th>
+                <th scope="col">{{ t('套餐名称') }}</th>
+                <th scope="col">{{ t('分配端口') }}</th>
+                <th scope="col">{{ t('计费用量 / 额度') }}</th>
+                <th scope="col">{{ t('上行 / 下行') }}</th>
+                <th scope="col">{{ t('流量计费') }}</th>
+                <th scope="col">{{ t('重置方式') }}</th>
+                <th scope="col">{{ t('下次重置（UTC）') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in users" :key="item.user.id">
+                <td>
+                  <strong :title="item.user.username">{{ item.user.username }}</strong>
+                </td>
+                <td>
+                  <span :title="item.plan?.name">{{ item.plan?.name ?? t('未分配套餐') }}</span>
+                </td>
+                <td class="numeric">{{ item.user.port_start ? `${item.user.port_start}–${item.user.port_end}` : '—' }}</td>
+                <td>
+                  <div v-if="item.usage" class="table-usage">
+                    <span :title="`${item.usage.used_bytes} / ${item.usage.limit_bytes} B`">{{ quotaText(item.usage.used_bytes, item.usage.limit_bytes) }}</span>
+                    <div class="progress-track" role="progressbar" :aria-label="t('计费用量 / 额度')" :aria-valuenow="usagePercent(item.usage.used_bytes, item.usage.limit_bytes)" aria-valuemin="0" aria-valuemax="100">
+                      <i :style="{ width: `${usagePercent(item.usage.used_bytes, item.usage.limit_bytes)}%` }" />
+                    </div>
+                    <span v-if="item.usage.exceeded" class="quota-label">{{ t('额度已用尽') }}</span>
+                  </div>
+                  <span v-else>{{ t('暂无用量') }}</span>
+                </td>
+                <td class="numeric">
+                  <template v-if="item.usage">{{ formatBytes(item.usage.upload_bytes) }} / {{ formatBytes(item.usage.download_bytes) }}</template>
+                  <template v-else>—</template>
+                </td>
+                <td>{{ item.plan ? t(accountingLabels[item.plan.accounting_mode]) : '—' }}</td>
+                <td>{{ item.plan ? t(resetLabels[item.plan.reset_mode]) : '—' }}{{ item.plan?.reset_day ? ` · ${item.plan.reset_day}` : '' }}</td>
+                <td class="numeric">{{ item.usage ? formatUTC(item.usage.cycle_end) : '—' }}</td>
+              </tr>
+              <tr v-if="!users.length">
+                <td colspan="8" class="empty-users">{{ t('暂无用户') }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <footer class="users-footer">{{ t('共 {total} 个用户', { total: users.length }) }}</footer>
+      </div>
+      <form v-else ref="formElement" class="resource-form" novalidate @submit.prevent="save">
+        <h2>{{ t(page === 'plans' ? '添加套餐' : '端口范围配置') }}</h2>
+        <p v-if="page === 'settings'" class="resource-description">{{ t('设置新用户的端口分配范围') }}</p>
+        <fieldset :disabled="busy">
+          <div class="resource-fields">
+            <template v-if="page === 'plans'">
+              <div class="field">
+                <label for="plan-name">{{ t('套餐名称') }}</label>
+                <input id="plan-name" v-model="plan.name" required maxlength="80" :aria-invalid="Boolean(fields.name)">
+                <p v-if="fields.name" class="field-error">{{ hint('name') }}</p>
+              </div>
+              <div class="field">
+                <label for="accounting-mode">{{ t('流量计费') }}</label>
+                <select id="accounting-mode" v-model="plan.accounting_mode">
+                  <option v-for="(label, key) in accountingLabels" :key="key" :value="key">{{ t(label) }}</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="port-count">{{ t('端口数量') }}</label>
+                <input id="port-count" v-model.number="plan.port_count" type="number" min="1" max="65535" required :aria-invalid="Boolean(fields.port_count)">
+                <p v-if="fields.port_count" class="field-error">{{ hint('port_count') }}</p>
+              </div>
+              <div class="field">
+                <label for="reset-mode">{{ t('重置方式') }}</label>
+                <select id="reset-mode" v-model="plan.reset_mode">
+                  <option v-for="(label, key) in resetLabels" :key="key" :value="key">{{ t(label) }}</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="traffic-limit">{{ t('流量额度（GiB）') }}</label>
+                <input id="traffic-limit" v-model="gib" inputmode="decimal" required :aria-invalid="Boolean(fields.traffic_limit_bytes)">
+                <p v-if="fields.traffic_limit_bytes" class="field-error">{{ hint('traffic_limit_bytes') }}</p>
+              </div>
+              <div v-if="plan.reset_mode === 'fixed_day'" class="field">
+                <label for="reset-day">{{ t('每月重置日') }}</label>
+                <input id="reset-day" v-model.number="resetDay" type="number" min="1" max="31" required :aria-invalid="Boolean(fields.reset_day)">
+                <p v-if="fields.reset_day" class="field-error">{{ hint('reset_day') }}</p>
+              </div>
+            </template>
+            <template v-else>
+              <div class="field">
+                <label for="pool-start">{{ t('分配起始端口') }}</label>
+                <input id="pool-start" v-model.number="pool.port_start" type="number" min="1" max="65535" required :aria-invalid="Boolean(fields.port_start)">
+                <p v-if="fields.port_start" class="field-error">{{ hint('port_start') }}</p>
+              </div>
+              <div class="field">
+                <label for="pool-end">{{ t('分配结束端口') }}</label>
+                <input id="pool-end" v-model.number="pool.port_end" type="number" :min="pool.port_start" max="65535" required :aria-invalid="Boolean(fields.port_end)">
+                <p v-if="fields.port_end" class="field-error">{{ hint('port_end') }}</p>
+              </div>
+            </template>
+          </div>
+          <p :class="page === 'settings' ? 'notice subtle' : 'field-hint'">{{ t(page === 'plans' ? '统一 UTC 00:00 重置；当月无对应日期时在月末重置，后续恢复原定日期。' : '范围变更只影响新用户，已有用户保留原端口段。') }}</p>
+          <div class="resource-actions">
+            <button v-if="page === 'settings'" class="button secondary" type="button" :disabled="busy" @click="load(true)">{{ t('刷新') }}</button>
+            <button class="button primary" type="submit" :disabled="busy || (page === 'settings' && !settings)">{{ busy ? t('正在保存…') : t(page === 'plans' ? '添加套餐' : '保存配置') }}</button>
+          </div>
+        </fieldset>
+      </form>
     </template>
-    <button class="button primary" type="submit" :disabled="busy || (page === 'users' && !plans.length) || (page === 'settings' && !settings)">{{ busy ? t('正在保存…') : t(page === 'plans' ? '添加套餐' : page === 'users' ? '添加用户' : '保存配置') }}</button>
-   </fieldset>
-  </form>
-  <div v-if="page === 'plans'" class="plan-list">
-   <article v-for="item in plans" :key="item.id" class="plan-card"><h2>{{ item.name }}</h2><p :title="`${item.traffic_limit_bytes} B`">{{ item.port_count }} {{ t('个端口') }} · {{ formatBytes(item.traffic_limit_bytes) }}</p><p>{{ t(accountingLabels[item.accounting_mode]) }} · {{ t(resetLabels[item.reset_mode]) }}{{ item.reset_day ? ` · ${item.reset_day}` : '' }}</p></article>
-  </div>
-  <div v-if="page === 'users'" class="user-list"><AccountOverview v-for="item in users" :key="item.user.id" :account="item" /></div>
- </section>
+    <Modal v-if="userDialog" :label="t('添加用户')" :busy="busy" @close="closeUser">
+      <form ref="formElement" class="user-create-form" novalidate @submit.prevent="save">
+        <header class="modal-header">
+          <h2>{{ t('添加用户') }}</h2>
+          <button type="button" class="icon-button" :aria-label="t('关闭表单')" :disabled="busy" @click="closeUser">
+            <Icon name="close" />
+          </button>
+        </header>
+        <div class="user-create-body">
+          <p v-if="error" role="alert" class="notice error">{{ errorMessage(error) }}</p>
+          <fieldset :disabled="busy">
+            <div class="field">
+              <label for="new-username">{{ t('用户名') }}</label>
+              <input id="new-username" v-model="user.username" data-autofocus required autocomplete="off" :aria-invalid="Boolean(fields.username)">
+              <p v-if="fields.username" class="field-error">{{ hint('username') }}</p>
+            </div>
+            <div class="field">
+              <label for="new-password">{{ t('密码') }}</label>
+              <input id="new-password" v-model="user.password" required type="password" autocomplete="new-password" :aria-invalid="Boolean(fields.password)">
+              <p v-if="fields.password" class="field-error">{{ hint('password') }}</p>
+            </div>
+            <div class="field">
+              <label for="user-plan">{{ t('选择套餐') }}</label>
+              <select id="user-plan" v-model="user.plan_id" required :aria-invalid="Boolean(fields.plan_id)">
+                <option value="">{{ t('选择套餐') }}</option>
+                <option v-for="item in plans" :key="item.id" :value="item.id">{{ item.name }}</option>
+              </select>
+              <p v-if="fields.plan_id" class="field-error">{{ hint('plan_id') }}</p>
+            </div>
+            <p v-if="selectedPlan" class="notice subtle">{{ selectedPlan.port_count }} {{ t('个端口') }} · {{ formatBytes(selectedPlan.traffic_limit_bytes) }} · {{ t(accountingLabels[selectedPlan.accounting_mode]) }}</p>
+            <p v-if="!plans.length" class="notice subtle">{{ t('暂无套餐，请先添加套餐。') }}</p>
+          </fieldset>
+        </div>
+        <footer class="modal-footer">
+          <button class="button secondary" type="button" :disabled="busy" @click="closeUser">{{ t('取消') }}</button>
+          <button class="button primary" type="submit" :disabled="busy || !plans.length">{{ busy ? t('正在保存…') : t('添加用户') }}</button>
+        </footer>
+      </form>
+    </Modal>
+  </section>
 </template>

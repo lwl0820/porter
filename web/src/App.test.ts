@@ -607,8 +607,10 @@ describe("流量统计", () => {
     for (const surface of [".desktop-table", ".mobile-cards"]) {
       const region = wrapper!.get(surface);
       expect(region.text()).toContain("统计已关闭");
-      expect(region.text()).toContain("上行0 B/s2.0 KiB");
-      expect(region.text()).toContain("下行0 B/s4.0 KiB");
+      const directions = region.findAll(".traffic-direction");
+      expect(directions.some(item => item.text().includes("上行") && item.text().includes("2.0 KiB"))).toBe(true);
+      expect(directions.some(item => item.text().includes("下行") && item.text().includes("4.0 KiB"))).toBe(true);
+      expect(directions.filter(item => item.text().includes("0 B/s"))).toHaveLength(2);
       expect(region.get(".traffic-direction strong").attributes("title")).toBe("2048 B");
       expect(region.get(".rule-traffic button").attributes("aria-label")).toBe("重置 应用入口 的流量");
     }
@@ -724,7 +726,7 @@ describe("中英文界面", () => {
     expect(wrapper!.get(".language-switcher select").element).toHaveProperty("value", "en");
     await button("Sign out").trigger("click");
     await flushPromises();
-    expect(wrapper!.text()).toContain("Welcome back");
+    expect(wrapper!.text()).toContain("Administrator sign in");
     expect(wrapper!.get(".language-switcher select").element).toHaveProperty("value", "en");
   });
 
@@ -736,7 +738,7 @@ describe("中英文界面", () => {
     expect(wrapper.text()).toContain("Connecting to Porter…");
     resolveSession(response({ error: { code: "unauthorized" } }, 401));
     await flushPromises();
-    expect(wrapper.text()).toContain("Welcome back");
+    expect(wrapper.text()).toContain("Administrator sign in");
   });
 
   it("非法偏好和不可用存储回退中文，仍允许本页切换", async () => {

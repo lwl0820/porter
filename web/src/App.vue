@@ -427,26 +427,14 @@ onUnmounted(() => {
     <section class="login-story" :aria-label="t('Porter 介绍')">
       <a class="brand" :href="isAdmin ? '/admin/' : '/user/'" :aria-label="t('Porter 首页')"
         ><span class="brand-mark"><Icon name="arrows" :size="25" /></span
-        ><span>Porter<span class="brand-period">.</span></span></a
+        ><span>Porter</span></a
       >
       <div class="story-content">
-        <span class="eyebrow">{{ t("让连接井然有序") }}</span>
-        <h1>{{ t("每一个端口，") }}<br />{{ t("都有清晰的去向。") }}</h1>
-        <p>{{ t("在一个面板中管理 TCP 与 UDP 转发，") }}<br />{{ t("让你的服务轻松连接。") }}</p>
+        <h1>{{ t(isAdmin ? '连接更广阔的世界' : '用户后台') }}</h1>
+        <p>{{ t(isAdmin ? '端口转发管理后台' : '登录您的账号以管理端口转发服务') }}</p>
         <div class="network-art" aria-hidden="true">
-          <div class="art-endpoint">
-            <Icon name="network" :size="28" /><span>{{ t("本机端口") }}</span>
-          </div>
-          <div class="art-link">
-            <i /><i /><i /><Icon name="arrow" :size="24" />
-          </div>
-          <div class="art-center"><Icon name="arrows" :size="34" /></div>
-          <div class="art-link">
-            <i /><i /><i /><Icon name="arrow" :size="24" />
-          </div>
-          <div class="art-endpoint">
-            <Icon name="layers" :size="28" /><span>{{ t("目标服务") }}</span>
-          </div>
+          <svg class="network-lines" viewBox="0 0 600 350" fill="none"><path d="M-20 310C90 180 150 280 260 190S430 30 610 125M-20 330C90 200 150 300 260 210S430 50 610 145M-20 290C90 160 150 260 260 170S430 10 610 105" stroke="#9fcaff" stroke-width="2" /><path d="M80 140 330 280 540 160M20 210 250 340M220 40 500 205" stroke="#d3e6ff" /><circle cx="125" cy="220" r="6" fill="#438aff" /><circle cx="410" cy="105" r="5" fill="#438aff" /><circle cx="475" cy="195" r="5" fill="#438aff" /></svg>
+          <div class="network-cube cube-one"><i /><b /><span /></div><div class="network-cube cube-two"><i /><b /><span /></div><div class="network-cube cube-three"><i /><b /><span /></div>
         </div>
       </div>
       <span class="story-footer">{{ t("简单连接 · 轻松掌控") }}</span>
@@ -457,8 +445,7 @@ onUnmounted(() => {
         <span class="login-mobile-brand"
           >Porter<span class="brand-period">.</span></span
         >
-        <div class="login-lock"><Icon name="lock" :size="25" /></div>
-        <p class="eyebrow">{{ t(isAdmin ? "管理后台" : "用户后台") }}</p><h2>{{ t("欢迎回来") }}</h2>
+        <h2>{{ t(isAdmin ? "管理员登录" : "用户登录") }}</h2>
         <p class="login-description">{{ t("登录以管理你的端口转发规则") }}</p>
         <form novalidate @submit.prevent="login">
           <div v-if="loginError" role="alert" class="notice error">
@@ -513,7 +500,7 @@ onUnmounted(() => {
       <div class="topbar-inner">
         <a class="brand" :href="isAdmin ? '/admin/' : '/user/'" :aria-label="t('Porter 首页')"
           ><span class="brand-mark"><Icon name="arrows" :size="24" /></span
-          ><span>Porter<span class="brand-period">.</span></span></a
+          ><span>Porter</span></a
         >
         <span class="header-divider" aria-hidden="true" />
         <button
@@ -563,13 +550,12 @@ onUnmounted(() => {
     </header>
     <main id="main-content" class="dashboard" tabindex="-1">
       <AdminResources v-if="isAdmin && page !== 'rules'" :key="page" :page="page" :api="api" @changed="resourcesChanged" @busy="resourceBusy = $event" />
-      <AccountOverview v-if="!isAdmin && account" :account="account" />
+      <AccountOverview v-if="!isAdmin && account" :account="account" :compact="page === 'rules'" />
       <template v-if="page === 'rules'">
       <div class="page-heading">
         <div>
-          <div class="eyebrow">{{ t("网络管理") }}</div>
-          <h1>{{ t("端口转发") }}</h1>
-          <p>{{ t("为你的服务建立连接，统一管理每一条转发规则。") }}</p>
+<h1>{{ t("端口转发") }}</h1>
+          <p>{{ t("管理端口转发规则，支持 TCP / UDP 协议转发。") }}</p>
         </div>
         <button
           type="button"
@@ -742,10 +728,10 @@ onUnmounted(() => {
                 <col v-if="isAdmin" class="column-owner">
                 <col class="column-protocol">
                 <col class="column-listen">
-                <col class="column-direction">
                 <col class="column-target">
                 <col class="column-status">
                 <col class="column-traffic">
+                <col class="column-speed">
                 <col class="column-operations">
               </colgroup>
               <thead>
@@ -754,10 +740,10 @@ onUnmounted(() => {
                   <th v-if="isAdmin" scope="col">{{ t("所属用户") }}</th>
                   <th scope="col">{{ t("协议") }}</th>
                   <th scope="col">{{ t("监听地址") }}</th>
-                  <th scope="col" class="direction-cell" />
                   <th scope="col">{{ t("转发目标") }}</th>
                   <th scope="col">{{ t("运行状态") }}</th>
-                  <th scope="col">{{ t("速度与流量") }}</th>
+                  <th scope="col">{{ t("累计流量") }}</th>
+                  <th scope="col">{{ t("当前速度") }}</th>
                   <th scope="col" class="operation-heading">{{ t("操作") }}</th>
                 </tr>
               </thead>
@@ -786,9 +772,6 @@ onUnmounted(() => {
                       >{{ address(rule.listen_host, rule.listen_port) }}</code
                     >
                   </td>
-                  <td class="direction-cell">
-                    <Icon name="arrow" :size="16" />
-                  </td>
                   <td class="address-cell">
                     <code
                       :title="address(rule.target_host, rule.target_port)"
@@ -812,7 +795,8 @@ onUnmounted(() => {
                       >{{ ruleErrorMessage(rule) }}</span
                     >
                   </td>
-                  <td class="traffic-cell"><RuleTraffic :rule="rule" :busy="mutationBusy" @reset="confirmReset" /></td>
+                  <td class="traffic-cell"><RuleTraffic :rule="rule" :busy="mutationBusy" mode="totals" @reset="confirmReset" /></td>
+                  <td class="speed-cell"><RuleTraffic :rule="rule" :busy="mutationBusy" mode="speed" /></td>
                   <td>
                     <RuleActions
                       :rule="rule"

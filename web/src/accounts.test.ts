@@ -52,12 +52,103 @@ beforeEach(() => {
   return response({}, 404);
  }));
 });
-afterEach(() => { wrapper?.unmount(); wrapper = undefined; document.body.innerHTML = ""; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { vi.useRealTimers(); wrapper?.unmount(); wrapper = undefined; document.body.innerHTML = ""; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 function button(text: string) { return wrapper!.findAll("button").find(item => item.text().includes(text))!; }
 async function startUser() { window.history.replaceState(null, "", "/user/"); wrapper = mount(UserApp, { attachTo: document.body }); await flushPromises(); }
 async function startAdmin() { wrapper = mount(AdminApp, { attachTo: document.body }); await flushPromises(); }
 
 describe("独立端与套餐界面", () => {
+ it("用户列表以八列展示十四个账号及缺省状态，保留精确用量与重置时间", async () => {
+  users = Array.from({ length: 14 }, (_, index) => account(String(index), `用户${index}`, 10000 + index * 10));
+  users[13] = { ...users[13]!, user: { ...users[13]!.user, role: "admin", plan_id: null, port_start: 0, port_end: 0 }, plan: null, usage: null };
+  await startAdmin(); await button("用户管理").trigger("click"); await flushPromises();
+  const table = wrapper!.get(".users-table");
+  expect(table.findAll("thead th")).toHaveLength(8);
+  expect(table.findAll("tbody tr")).toHaveLength(14);
+  expect(wrapper!.find(".user-list").exists()).toBe(false);
+  expect(wrapper!.find(".account-overview").exists()).toBe(false);
+  expect(table.get("tbody tr").text()).toContain("10000–10009");
+  expect(table.get("tbody tr").text()).toContain("2026-10-31 00:00:00 UTC");
+  expect(table.get('[title="9007199254740993 / 9007199254740993 B"]').text()).toContain("8.0 PiB");
+  expect(table.get('[role="progressbar"]').attributes("aria-valuenow")).toBe("100");
+  expect(table.findAll("tbody tr")[13]!.text()).toContain("未分配套餐");
+  expect(table.findAll("tbody tr")[13]!.text()).toContain("暂无用量");
+  expect(wrapper!.text()).toContain("共 14 个用户");
+  expect(wrapper!.find("form").exists()).toBe(false);
+ });
+ it("添加用户弹窗取消恢复焦点且清空密码，提交时禁用关闭并防止重复", async () => {
+  await startAdmin(); await button("用户管理").trigger("click"); await flushPromises();
+  const add = button("添加用户"); (add.element as HTMLButtonElement).focus();
+  await add.trigger("click"); await flushPromises();
+  expect(document.activeElement?.id).toBe("new-username");
+  await wrapper!.get("#new-password").setValue("private-password");
+  await button("取消").trigger("click"); await flushPromises();
+  expect(wrapper!.find("dialog").exists()).toBe(false);
+  expect(document.activeElement).toBe(add.element);
+  await add.trigger("click"); await flushPromises();
+  expect(wrapper!.get("#new-password").element).toHaveProperty("value", "");
+  await wrapper!.get("#new-username").setValue("新用户"); await wrapper!.get("#new-password").setValue("new-password");
+  const original = fetch;
+  let finish!: (value: Response) => void;
+  vi.stubGlobal("fetch", vi.fn((path: string, options: RequestInit = {}) => path.endsWith("/users") && options.method === "POST" ? new Promise<Response>(resolve => { finish = resolve; }) : original(path, options)));
+  await wrapper!.get("form").trigger("submit"); await wrapper!.get("form").trigger("submit");
+  expect(wrapper!.get('[aria-label="关闭表单"]').attributes("disabled")).toBeDefined();
+  expect(wrapper!.get('header nav button').attributes("disabled")).toBeDefined();
+  await wrapper!.get("dialog").trigger("cancel");
+  expect(wrapper!.find("dialog").exists()).toBe(true);
+  expect(vi.mocked(fetch).mock.calls.filter(([, options]) => options?.method === "POST")).toHaveLength(1);
+  finish(response(account("new", "新用户", 12000), 201)); await flushPromises();
+  expect(wrapper!.find("dialog").exists()).toBe(false);
+  expect(wrapper!.get(".users-table").text()).toContain("新用户");
+ });
+ it("添加失败时后台轮询不清除弹窗错误，用户可取消后重试", async () => {
+  vi.useFakeTimers();
+  const original = fetch;
+  vi.stubGlobal("fetch", vi.fn((path: string, options: RequestInit = {}) => path.endsWith("/users") && options.method === "POST" ? Promise.resolve(response({ error: { code: "conflict", message: "名称已存在" } }, 409)) : original(path, options)));
+  await startAdmin(); await button("用户管理").trigger("click"); await flushPromises();
+  await button("添加用户").trigger("click"); await flushPromises();
+  await wrapper!.get("#new-username").setValue("同名用户"); await wrapper!.get("#new-password").setValue("new-password");
+  await wrapper!.get("form").trigger("submit"); await flushPromises();
+  expect(wrapper!.get('dialog [role="alert"]').text()).toContain("名称已存在");
+  await vi.advanceTimersByTimeAsync(10000); await flushPromises();
+  expect(wrapper!.get('dialog [role="alert"]').text()).toContain("名称已存在");
+  expect(wrapper!.get("#new-username").element).toHaveProperty("value", "同名用户");
+  await button("取消").trigger("click"); await flushPromises();
+  await button("添加用户").trigger("click"); await flushPromises();
+  expect(wrapper!.find('dialog [role="alert"]').exists()).toBe(false);
+ });
+ it("没有套餐时仍可打开添加弹窗并明确说明不可提交", async () => {
+  const original = fetch;
+  vi.stubGlobal("fetch", vi.fn((path: string, options: RequestInit = {}) => path.endsWith("/plans") && !options.method ? Promise.resolve(response({ plans: [] })) : original(path, options)));
+  await startAdmin(); await button("用户管理").trigger("click"); await flushPromises();
+  await button("添加用户").trigger("click"); await flushPromises();
+  expect(wrapper!.get("dialog").text()).toContain("暂无套餐，请先添加套餐。");
+  expect(wrapper!.get('dialog button[type="submit"]').attributes("disabled")).toBeDefined();
+ });
+ it("打开添加用户弹窗后忽略此前已发出的轮询失败", async () => {
+  vi.useFakeTimers();
+  await startAdmin(); await button("用户管理").trigger("click"); await flushPromises();
+  const original = fetch;
+  let finish!: (value: Response) => void;
+  vi.stubGlobal("fetch", vi.fn((path: string, options: RequestInit = {}) => path === "/api/admin/plans" && !options.method ? new Promise<Response>(resolve => { finish = resolve; }) : original(path, options)));
+  await vi.advanceTimersByTimeAsync(5000);
+  await button("添加用户").trigger("click"); await flushPromises();
+  await wrapper!.get("#new-username").setValue("正在填写");
+  finish(response({ error: { code: "internal_error" } }, 500)); await flushPromises();
+  expect(wrapper!.find('dialog [role="alert"]').exists()).toBe(false);
+  expect(wrapper!.get("#new-username").element).toHaveProperty("value", "正在填写");
+ });
+ it("用户规则采用摘要，账户页显示唯一标题和有界精确进度", async () => {
+  users[0]!.usage!.used_bytes = "9007199254740992";
+  await startUser();
+  expect(wrapper!.get(".account-overview").classes()).toContain("compact");
+  expect(wrapper!.get('[role="progressbar"]').attributes("aria-valuenow")).toBe("99.99");
+  await button("账户概览").trigger("click");
+  expect(wrapper!.findAll("h1")).toHaveLength(1);
+  expect(wrapper!.get("h1").text()).toBe("账户概览");
+  expect(wrapper!.get(".account-overview").classes()).not.toContain("compact");
+  expect(wrapper!.find(".usage-ring").exists()).toBe(true);
+ });
  it("管理员页头导航保留各页面入口、当前状态和切页收起行为", async () => {
   await startAdmin();
   const header = wrapper!.get("header");
@@ -132,7 +223,7 @@ describe("独立端与套餐界面", () => {
   expect(calls.every(item => item.path.startsWith("/api/user/"))).toBe(true);
   expect(wrapper!.text()).toContain("额度已用尽");
   expect(wrapper!.text()).toContain("2026-10-31 00:00:00 UTC");
-  expect(wrapper!.get('.resource-grid dd').attributes("title")).toBe("9007199254740993 / 9007199254740993 B");
+  expect(wrapper!.get('.usage-numbers').attributes("title")).toBe("9007199254740993 / 9007199254740993 B");
   expect(wrapper!.text()).toContain("单向（上下行较大值）");
   expect(wrapper!.find('[aria-label="按用户筛选"]').exists()).toBe(false);
   expect(wrapper!.text()).not.toContain("用户管理");
@@ -194,9 +285,13 @@ describe("独立端与套餐界面", () => {
  });
  it("用户选择套餐并显示实际分配结果；配置保存使用版本头", async () => {
   await startAdmin(); await button("用户管理").trigger("click"); await flushPromises();
+  await button("添加用户").trigger("click"); await flushPromises();
   await wrapper!.get("#new-username").setValue("新用户"); await wrapper!.get("#new-password").setValue("new-password"); await wrapper!.get("#user-plan").setValue(plan.id);
   await wrapper!.get("form").trigger("submit"); await flushPromises();
-  expect(wrapper!.text()).toContain("12000–12009"); expect(wrapper!.get("#new-password").element).toHaveProperty("value", "");
+  expect(wrapper!.text()).toContain("12000–12009"); expect(wrapper!.find("dialog").exists()).toBe(false);
+  await button("添加用户").trigger("click"); await flushPromises();
+  expect(wrapper!.get("#new-password").element).toHaveProperty("value", "");
+  await button("取消").trigger("click");
   await button("系统配置").trigger("click"); await flushPromises();
   await wrapper!.get("#pool-start").setValue(20000); await wrapper!.get("#pool-end").setValue(30000); await wrapper!.get("form").trigger("submit"); await flushPromises();
   const write = calls.find(item => item.path.endsWith("settings") && item.options.method === "PUT")!;
@@ -220,6 +315,7 @@ describe("独立端与套餐界面", () => {
   const write = calls.find(item => item.path.endsWith("settings") && item.options.method === "PUT")!;
   expect(new Headers(write.options.headers).get("If-Match")).toBe('"9"');
   await button("用户管理").trigger("click"); await flushPromises();
+  await button("添加用户").trigger("click"); await flushPromises();
   await wrapper!.get('.language-switcher select').setValue("en");
   expect(wrapper!.get("form").attributes("novalidate")).toBeDefined();
   await wrapper!.get("form").trigger("submit"); await flushPromises();

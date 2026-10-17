@@ -2,7 +2,7 @@
 import LanguageSwitcher from "./LanguageSwitcher.vue";
 import { nextTick, onMounted, onUnmounted, ref } from "vue";
 
-defineProps<{ label: string; busy?: boolean; drawer?: boolean }>();
+defineProps<{ label: string; busy?: boolean }>();
 const emit = defineEmits<{ close: [] }>();
 const dialog = ref<HTMLDialogElement>();
 let previousFocus: HTMLElement | null = null;
@@ -25,7 +25,7 @@ onUnmounted(() => {
   <dialog
     ref="dialog"
     :aria-label="label"
-    :class="['modal', { drawer }]"
+    class="modal"
     @cancel.prevent="!busy && emit('close')"
     @click="$event.target === dialog && !busy && emit('close')"
   >

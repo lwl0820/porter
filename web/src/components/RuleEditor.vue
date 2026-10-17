@@ -120,7 +120,6 @@ async function submit(): Promise<void> {
   <Modal
     :label="rule ? t('编辑规则') : t('新增规则')"
     :busy="busy"
-    drawer
     @close="emit('close')"
   >
     <form ref="formElement" class="editor" novalidate @submit.prevent="submit">
@@ -193,103 +192,105 @@ async function submit(): Promise<void> {
             </div>
           </div>
           <p v-if="fields.protocol" class="field-error">{{ fieldErrorMessage("protocol", fields.protocol) }}</p>
-          <div class="form-section-label">
-            <span class="step-dot">1</span>{{ t("本机监听") }}
-          </div>
-          <div class="address-fields">
-            <div class="field">
-              <label for="listen-host">{{ t("监听 IP") }}</label
-              ><input
-                id="listen-host"
-                v-model="form.listen_host"
-                spellcheck="false"
-                :aria-invalid="Boolean(fields.listen_host)"
-                :aria-describedby="
-                  fields.listen_host
-                    ? 'listen-host-hint error-listen_host'
-                    : 'listen-host-hint'
-                "
-              />
-              <p id="listen-host-hint" class="field-hint">
-                {{ t("0.0.0.0 监听所有 IPv4 地址；IPv6 使用 ::。") }}
-              </p>
-              <p
-                v-if="fields.listen_host"
-                id="error-listen_host"
-                class="field-error"
-              >
-                {{ fieldErrorMessage("listen_host", fields.listen_host) }}
-              </p>
+          <div class="editor-route">
+            <section class="route-endpoint">
+              <div class="form-section-label">{{ t("本机监听") }}</div>
+              <div class="address-fields">
+                <div class="field">
+                  <label for="listen-host">{{ t("监听 IP") }}</label
+                  ><input
+                    id="listen-host"
+                    v-model="form.listen_host"
+                    spellcheck="false"
+                    :aria-invalid="Boolean(fields.listen_host)"
+                    :aria-describedby="
+                      fields.listen_host
+                        ? 'listen-host-hint error-listen_host'
+                        : 'listen-host-hint'
+                    "
+                  />
+                  <p id="listen-host-hint" class="field-hint">
+                    {{ t("0.0.0.0 监听所有 IPv4 地址；IPv6 使用 ::。") }}
+                  </p>
+                  <p
+                    v-if="fields.listen_host"
+                    id="error-listen_host"
+                    class="field-error"
+                  >
+                    {{ fieldErrorMessage("listen_host", fields.listen_host) }}
+                  </p>
+                </div>
+                <div class="field">
+                  <label for="listen-port">{{ t("监听端口") }}</label
+                  ><input
+                    id="listen-port"
+                    v-model="form.listen_port"
+                    inputmode="numeric"
+                    placeholder="8081"
+                    :aria-invalid="Boolean(fields.listen_port)"
+                    :aria-describedby="
+                      fields.listen_port ? 'error-listen_port' : undefined
+                    "
+                  />
+                  <p
+                    v-if="fields.listen_port"
+                    id="error-listen_port"
+                    class="field-error"
+                  >
+                    {{ fieldErrorMessage("listen_port", fields.listen_port) }}
+                  </p>
+                </div>
+              </div>
+            </section>
+            <div class="flow-connector">
+              <Icon name="arrow" :size="17" /><span>{{ t("转发到") }}</span>
             </div>
-            <div class="field">
-              <label for="listen-port">{{ t("监听端口") }}</label
-              ><input
-                id="listen-port"
-                v-model="form.listen_port"
-                inputmode="numeric"
-                placeholder="8081"
-                :aria-invalid="Boolean(fields.listen_port)"
-                :aria-describedby="
-                  fields.listen_port ? 'error-listen_port' : undefined
-                "
-              />
-              <p
-                v-if="fields.listen_port"
-                id="error-listen_port"
-                class="field-error"
-              >
-                {{ fieldErrorMessage("listen_port", fields.listen_port) }}
-              </p>
-            </div>
-          </div>
-          <div class="flow-connector">
-            <Icon name="arrow" :size="17" /><span>{{ t("转发到") }}</span>
-          </div>
-          <div class="form-section-label">
-            <span class="step-dot">2</span>{{ t("目标服务") }}
-          </div>
-          <div class="address-fields">
-            <div class="field">
-              <label for="target-host">{{ t("目标主机") }}</label
-              ><input
-                id="target-host"
-                v-model="form.target_host"
-                autocomplete="off"
-                spellcheck="false"
-                :placeholder="t('10.0.0.2 或 example.com')"
-                :aria-invalid="Boolean(fields.target_host)"
-                :aria-describedby="
-                  fields.target_host ? 'error-target_host' : undefined
-                "
-              />
-              <p
-                v-if="fields.target_host"
-                id="error-target_host"
-                class="field-error"
-              >
-                {{ fieldErrorMessage("target_host", fields.target_host) }}
-              </p>
-            </div>
-            <div class="field">
-              <label for="target-port">{{ t("目标端口") }}</label
-              ><input
-                id="target-port"
-                v-model="form.target_port"
-                inputmode="numeric"
-                placeholder="443"
-                :aria-invalid="Boolean(fields.target_port)"
-                :aria-describedby="
-                  fields.target_port ? 'error-target_port' : undefined
-                "
-              />
-              <p
-                v-if="fields.target_port"
-                id="error-target_port"
-                class="field-error"
-              >
-                {{ fieldErrorMessage("target_port", fields.target_port) }}
-              </p>
-            </div>
+            <section class="route-endpoint">
+              <div class="form-section-label">{{ t("目标服务") }}</div>
+              <div class="address-fields">
+                <div class="field">
+                  <label for="target-host">{{ t("目标主机") }}</label
+                  ><input
+                    id="target-host"
+                    v-model="form.target_host"
+                    autocomplete="off"
+                    spellcheck="false"
+                    :placeholder="t('10.0.0.2 或 example.com')"
+                    :aria-invalid="Boolean(fields.target_host)"
+                    :aria-describedby="
+                      fields.target_host ? 'error-target_host' : undefined
+                    "
+                  />
+                  <p
+                    v-if="fields.target_host"
+                    id="error-target_host"
+                    class="field-error"
+                  >
+                    {{ fieldErrorMessage("target_host", fields.target_host) }}
+                  </p>
+                </div>
+                <div class="field">
+                  <label for="target-port">{{ t("目标端口") }}</label
+                  ><input
+                    id="target-port"
+                    v-model="form.target_port"
+                    inputmode="numeric"
+                    placeholder="443"
+                    :aria-invalid="Boolean(fields.target_port)"
+                    :aria-describedby="
+                      fields.target_port ? 'error-target_port' : undefined
+                    "
+                  />
+                  <p
+                    v-if="fields.target_port"
+                    id="error-target_port"
+                    class="field-error"
+                  >
+                    {{ fieldErrorMessage("target_port", fields.target_port) }}
+                  </p>
+                </div>
+              </div>
+            </section>
           </div>
           <label class="enable-field">
             <span><strong>{{ t("流量统计") }}</strong><span>{{ t("记录上下行流量与速度") }}</span></span>

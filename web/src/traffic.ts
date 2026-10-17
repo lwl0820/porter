@@ -33,3 +33,15 @@ export function gibToBytes(value: string): string | undefined {
   const bytes = numerator / scale;
   return bytes > 0n && bytes <= 9223372036854775807n ? String(bytes) : undefined;
 }
+
+// 先用整数计算到百分之一百分点，最后转换为有界显示数值。
+export function usagePercent(used: string, limit: string): number {
+  const quota = BigInt(limit);
+  if (quota <= 0n) return 0;
+  const value = BigInt(used);
+  return value >= quota ? 100 : Number(value * 10000n / quota) / 100;
+}
+
+export function formatUTC(value: string): string {
+  return new Date(value).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
+}

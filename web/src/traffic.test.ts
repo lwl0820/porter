@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { adminApi as api } from "./api";
-import { formatBytes, formatSpeed } from "./traffic";
+import { formatBytes, formatSpeed, usagePercent } from "./traffic";
 
 const rule = {
   owner_id: "admin", owner: { id: "admin", username: "admin", role: "admin" },
@@ -13,6 +13,13 @@ const rule = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("流量格式与边界", () => {
+  it("大整数字节的进度按整数计算并限制为有效百分比", () => {
+    expect(usagePercent("9007199254740992", "9007199254740993")).toBe(99.99);
+    expect(usagePercent("4611686018427387903", "9223372036854775807")).toBe(49.99);
+    expect(usagePercent("999", "10")).toBe(100);
+    expect(usagePercent("0", "0")).toBe(0);
+    expect(usagePercent("0", "9223372036854775807")).toBe(0);
+  });
   it("以 BigInt 格式化累计量，并显示速度单位", () => {
     expect(formatBytes("0")).toBe("0 B");
     expect(formatBytes("1023")).toBe("1023 B");
