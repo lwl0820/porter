@@ -6,3 +6,4 @@
 {"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "安装状态、系统命令、卸载和恢复的合同一致性"}
 {"file": ".trellis/tasks/10-18-native-cli-install-improvements/research/安装与版本证据.md", "reason": "官方旧版报错复现、Release时序、PATH位置及收尾证据"}
 {"file": ".trellis/tasks/10-18-native-cli-install-improvements/research/双程序拆分证据.md", "reason": "入口/协议依赖/归档/Docker/旧unit证据，显式升级与恢复，首次语言持久化和purge配置清理的新增要求与现状"}
+{"file": ".trellis/tasks/10-18-native-cli-install-improvements/research/actions-v040-followup.md", "reason": "发布收尾：v0.4.0 Actions故障证据、异步配额测试修复边界及补丁发布验收"}

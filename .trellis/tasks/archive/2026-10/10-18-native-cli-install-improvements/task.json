@@ -12,7 +12,7 @@
   "assignee": "lwl0820",
   "createdAt": "2026-10-18",
   "completedAt": "2026-10-18",
-  "branch": "codex/native-cli-install-improvements",
+  "branch": "codex/fix-quota-test-synchronization",
   "base_branch": "main",
   "worktree_path": null,
   "commit": "cd5fc8f9617e401ed65af627eb92c93cc2750e8b",
@@ -36,9 +36,12 @@
     "README.md",
     "README.zh-CN.md"
   ],
-  "notes": "用户授权完整实现、提交、main合并、删除开发分支、打标签推送。产品提交cd5fc8f9617e401ed65af627eb92c93cc2750e8b；独立检查无已定位遗留缺陷，验证和最终源码hash见research。后续按提交计划归档、记录会话并执行v0.4.0发布。",
+  "notes": "用户授权完整实现、提交、main合并、删除开发分支、打标签推送。产品提交cd5fc8f9617e401ed65af627eb92c93cc2750e8b；独立检查无已定位遗留缺陷，验证和最终源码hash见research。后续按提交计划归档、记录会话并执行v0.4.0发布。\n发布收尾：用户报告 v0.4.0 Actions 失败，恢复原任务处理异步配额测试过早断言，并验证补丁发布。\n发布修复代码及规范已提交c95a363，最终本地多轮与独立检查通过。保留原v0.4.0，准备发布v0.4.1；远端验证尚待推送后执行。",
   "meta": {
-    "release_tag": "v0.4.0",
-    "release_authorization": "用户明确授权完成后提交、合并main、删除开发分支、打tag推送；现有远端最高v0.3.0，选择下一功能版本v0.4.0，发布前再检查无冲突。"
+    "release_tag": "v0.4.1",
+    "release_authorization": "用户明确授权完成后提交、合并main、删除开发分支、打tag推送；现有远端最高v0.3.0，选择下一功能版本v0.4.0，发布前再检查无冲突。",
+    "previous_release_tag": "v0.4.0",
+    "release_followup": "修复标签CI异步配额测试同步漏洞；原发布用户授权持续有效，不移动原标签。",
+    "release_fix_commit": "c95a363"
   }
 }
