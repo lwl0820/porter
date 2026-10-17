@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端开发范围与内部中文约定"}
+{"file": ".trellis/spec/frontend/contracts.md", "reason": "现有 API、交互、流量与质量验证契约；双语需求优先于原产品仅中文约定"}
+{"file": ".trellis/tasks/10-17-frontend-bilingual/research/frontend.md", "reason": "现有消息位置、真实后端错误码与测试兼容注意事项"}
