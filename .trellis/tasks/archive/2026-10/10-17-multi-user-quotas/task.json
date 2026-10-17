@@ -21,7 +21,7 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "功能与质量门禁已完成并提交00b57ce；按用户授权归档当前任务、记录日志，再合并main、删除开发分支后推送。",
+  "notes": "功能提交00b57ce，质量门禁全部通过；任务已归档并记录会话，已合并main及删除开发分支，主会话执行已授权的主分支推送。",
   "meta": {
     "quality_gate": {
       "status": "passed",
@@ -30,6 +30,11 @@
       "container_smoke": "passed",
       "browser": "passed",
       "commit_approval": "approved"
+    },
+    "delivery": {
+      "merged_to": "main",
+      "development_branch_deleted": true,
+      "push_authorized": true
     }
   }
 }
