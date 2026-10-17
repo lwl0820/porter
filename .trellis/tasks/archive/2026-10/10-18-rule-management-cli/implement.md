@@ -79,4 +79,4 @@ python3 scripts/docker-smoke.py porter:cli-local
 - [x] 已完成最终原生双架构构建、参数/PTY E2E、安装卸载和容器回归，详见 verification.md。
 - [x] 已更新 .trellis/spec/backend/cli-contracts.md 及后端索引。
 - [x] 最终验收记录已封版，用户明确确认 commit-plan.md 两批次提交，并授权后续合并、删除分支、打标签推送。
-- [ ] 提交完成后归档本任务及记录本会话；其他历史任务不做收尾。
+- [x] 两批次工作提交已完成；本轮继续按授权归档本任务及记录会话，其他历史任务保留。

@@ -66,5 +66,3 @@
 ## 验证边界
 
 这些结果覆盖当前 Linux amd64 隔离环境、真实用户命名空间对端、真实 socket/PTY 与 Docker Engine；不代表真实 systemd 用户切换、完整发行版原生安装或 arm64 宿主运行已实测。当前 Docker CLI 无 Buildx，未宣称按原 Dockerfile 完成 BuildKit 多架构构建；原 Dockerfile 及其固定镜像定义保持兼容要求。
-
-
