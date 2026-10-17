@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/lwl0820/porter/internal/localapi"
+	"github.com/lwl0820/porter/internal/controlapi"
 	"github.com/lwl0820/porter/internal/model"
 	"github.com/lwl0820/porter/internal/native"
 )
@@ -30,35 +30,76 @@ type options struct {
 	revision   int64
 }
 type runner struct {
-	lang     string
-	out, err io.Writer
-	api      ruleAPI
-	tty      *terminal
-	ctx      context.Context
+	lang        string
+	out, err    io.Writer
+	api         ruleAPI
+	tty         *terminal
+	ctx         context.Context
+	preferences preferenceStore
+	canSave     bool
 }
 
-// Run 必须在服务配置、日志和数据库初始化前调用。
+// Run 仅处理独立客户端，不加载服务配置或数据库。
 func Run(ctx context.Context, args []string, out, stderr io.Writer) int {
-	r := &runner{ctx: ctx, out: out, err: stderr}
-	validEntry := len(args) > 0 && (args[0] == "rules" || args[0] == "--help" || args[0] == "-h")
+	return run(ctx, args, out, stderr, newPreferences(), openTerminal, native.Available(), os.Geteuid())
+}
+
+func run(ctx context.Context, args []string, out, stderr io.Writer, preferences preferenceStore, openTTY func(context.Context) (*terminal, error), available bool, uid int) int {
+	r := &runner{ctx: ctx, out: out, err: stderr, lang: "en", preferences: preferences}
+	validEntry := len(args) == 0 || strings.HasPrefix(args[0], "--") || args[0] == "-h" || args[0] == "rules"
 	if len(args) > 0 && args[0] == "rules" {
 		args = args[1:]
 	}
 	lang, jsonMode, langErr := languageOption(args)
-	r.lang = lang
-	var err error
+	if lang != "" {
+		r.lang = lang
+	}
 	if langErr != nil {
 		return r.fail(langErr, jsonMode)
 	}
-	if r.lang == "" {
-		r.tty, err = openTerminal(ctx)
-		if err != nil {
-			return r.fail(cliError("language_required"), jsonMode)
+	// 只有可写的原生管理调用允许保存；帮助始终只读。
+	help := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--help" || arg == "-h" {
+			help = true
 		}
-		defer r.tty.Close()
-		r.lang, err = r.tty.language()
-		if err != nil {
-			return 0
+		if strings.HasPrefix(arg, "--") {
+			key, _, equals := splitOption(arg)
+			if valueFlags[key] && !equals {
+				i++
+			}
+		}
+	}
+	r.canSave = available && uid == 0 && !help
+	if lang == "" {
+		saved, readErr := preferences.Read()
+		if readErr != nil {
+			code := preferenceReadCode(readErr)
+			if code != "preference_unreadable" {
+				return r.fail(cliError(code), jsonMode)
+			}
+			r.preferenceWarning(code)
+			r.canSave = false
+		}
+		if saved != "" {
+			r.lang = saved
+		} else {
+			var err error
+			r.tty, err = openTTY(ctx)
+			if err != nil {
+				return r.fail(cliError("language_required"), jsonMode)
+			}
+			defer r.tty.Close()
+			r.lang, err = r.tty.language()
+			if err != nil {
+				return 0
+			}
+			if r.canSave {
+				r.lang = r.saveLanguage(r.lang, false)
+			} else {
+				r.preferenceWarning("preference_readonly")
+			}
 		}
 	}
 	if !validEntry {
@@ -79,10 +120,10 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer) int {
 	if opts.action == "" && opts.json {
 		return r.fail(cliError("menu_json"), true)
 	}
-	if !native.Available() {
+	if !available {
 		return r.fail(cliError("native_only"), opts.json)
 	}
-	if os.Geteuid() != 0 {
+	if uid != 0 {
 		return r.fail(cliError("root_required"), opts.json)
 	}
 	path := opts.values["socket"]
@@ -90,12 +131,12 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer) int {
 		path = os.Getenv("PORTER_CONTROL_SOCKET")
 	}
 	if path == "" {
-		path = localapi.DefaultSocket
+		path = controlapi.DefaultSocket
 	}
-	r.api = localapi.NewClient(path)
+	r.api = controlapi.NewClient(path)
 	if opts.action == "" {
 		if r.tty == nil {
-			r.tty, err = openTerminal(ctx)
+			r.tty, err = openTTY(ctx)
 			if err != nil {
 				return r.fail(cliError("terminal_required"), false)
 			}
@@ -325,7 +366,7 @@ func (r *runner) execute(o options) (any, error) {
 	switch o.action {
 	case "list":
 		items, err := r.api.List(r.ctx, o.values["owner-id"])
-		return localapi.RuleList{Rules: items}, err
+		return controlapi.RuleList{Rules: items}, err
 	case "get":
 		return r.api.Get(r.ctx, o.id)
 	case "add":
@@ -347,12 +388,12 @@ func (r *runner) execute(o options) (any, error) {
 	}
 	return nil, usage(o.action)
 }
-func cliError(code string) *localapi.Error { return &localapi.Error{Code: code} }
-func usage(detail string) *localapi.Error {
-	return &localapi.Error{Code: "usage_error", Message: detail}
+func cliError(code string) *controlapi.Error { return &controlapi.Error{Code: code} }
+func usage(detail string) *controlapi.Error {
+	return &controlapi.Error{Code: "usage_error", Message: detail}
 }
 func (r *runner) fail(err error, jsonMode bool) int {
-	var problem *localapi.Error
+	var problem *controlapi.Error
 	if !errors.As(err, &problem) {
 		problem = cliError("internal_error")
 	}
@@ -376,7 +417,7 @@ func (r *runner) fail(err error, jsonMode bool) int {
 		}
 	}
 	switch problem.Code {
-	case "usage_error", "no_changes", "language_required", "language_invalid", "menu_json", "terminal_required":
+	case "usage_error", "no_changes", "language_required", "language_invalid", "menu_json", "terminal_required", "preference_invalid":
 		return 2
 	}
 	return 1
@@ -391,14 +432,14 @@ func (r *runner) text(zh, en string) string {
 func (r *runner) localizeResult(value any) any {
 	localize := func(v model.Rule) model.Rule {
 		if v.LastErrorCode != "" {
-			v.LastError = r.errorMessage(&localapi.Error{Code: v.LastErrorCode})
+			v.LastError = r.errorMessage(&controlapi.Error{Code: v.LastErrorCode})
 		}
 		return v
 	}
 	switch v := value.(type) {
 	case model.Rule:
 		return localize(v)
-	case localapi.RuleList:
+	case controlapi.RuleList:
 		for i := range v.Rules {
 			v.Rules[i] = localize(v.Rules[i])
 		}

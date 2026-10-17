@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/lwl0820/porter/internal/localapi"
+	"github.com/lwl0820/porter/internal/controlapi"
 	"github.com/lwl0820/porter/internal/model"
 )
 
@@ -18,13 +18,21 @@ func (r *runner) menu() error {
 	view.out = r.tty.file
 	view.err = r.tty.file
 	for {
-		choice, err := r.tty.read(r.text("\n规则管理\n1 创建\n2 列表\n3 详情\n4 修改\n5 删除\n0 退出\n> ", "\nRule management\n1 Create\n2 List\n3 Details\n4 Update\n5 Delete\n0 Exit\n> "))
+		choice, err := r.tty.read(r.text("\n规则管理\n1 创建\n2 列表\n3 详情\n4 修改\n5 删除\n6 切换语言\n0 退出\n> ", "\nRule management\n1 Create\n2 List\n3 Details\n4 Update\n5 Delete\n6 Change language\n0 Exit\n> "))
 		if err != nil {
 			return err
 		}
 		switch choice {
 		case "0", "q":
 			return nil
+		case "6":
+			var language string
+			language, err = r.tty.language()
+			if err == nil {
+				r.lang = language
+				r.lang = r.saveLanguage(language, true)
+				view.lang = r.lang
+			}
 		case "1":
 			err = view.createWizard()
 		case "2":
@@ -196,7 +204,7 @@ func (r *runner) createWizard() error {
 			r.detail(r.out, value)
 			return nil
 		}
-		var e *localapi.Error
+		var e *controlapi.Error
 		if !errors.As(err, &e) || e.Code != "validation_error" {
 			return err
 		}
@@ -230,7 +238,7 @@ func (r *runner) editWizard(old model.Rule) error {
 			r.detail(r.out, value)
 			return nil
 		}
-		var e *localapi.Error
+		var e *controlapi.Error
 		if !errors.As(err, &e) || e.Code != "validation_error" {
 			return err
 		}

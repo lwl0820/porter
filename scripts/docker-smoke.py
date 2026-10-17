@@ -215,21 +215,23 @@ def rule_input(rule, **changes):
 
 
 def verify_native_control_disabled(name):
-    # 显式语言确保检查的是容器限制，而不是无终端时的语言选择失败。
+    configuration = json.loads(docker("inspect", name).stdout)[0]["Config"]
+    assert configuration["Entrypoint"] == ["/porterd"], "Unexpected service entrypoint"
+    # 镜像只包含服务；服务不能将客户端命令误当启动参数。
     result = docker(
-        "exec", name, "/porter", "rules", "list", "--lang", "en", "--json",
-        "--socket", "/data/smoke-control.sock", check=False,
+        "exec", name, "/porterd", "rules", check=False,
     )
-    assert result.returncode == 1, "Container rule CLI must reject native management"
+    assert result.returncode != 0, "Service unexpectedly accepts rule commands"
     assert result.stdout == "", "Rejected rule CLI wrote to standard output"
-    assert json.loads(result.stderr)["error"]["code"] == "native_only", result.stderr
+    assert "rules" in result.stderr, result.stderr
+    assert "PORTER_ADMIN_PASSWORD" not in result.stderr, result.stderr
     # scratch 镜像没有 shell；Docker 归档接口能直接检查容器及数据卷路径。
-    for path in ("/data/porter-control.sock", "/data/smoke-control.sock"):
+    for path in ("/porter", "/usr/bin/porter", "/data/porter-control.sock", "/data/smoke-control.sock"):
         missing = subprocess.run(
             ["docker", "cp", f"{name}:{path}", "-"], capture_output=True, timeout=10,
         )
         assert missing.returncode != 0 and b"Could not find the file" in missing.stderr, (
-            f"Container unexpectedly exposes a control node at {path}: "
+            f"Container unexpectedly contains a client or control node at {path}: "
             + missing.stderr.decode(errors="replace")
         )
 
@@ -503,7 +505,7 @@ def main():
         panel.request("POST", f'/api/admin/rules/{small_rule["id"]}/retry',
                       revision=small_rule["revision"], status=409)
         verify_traffic(bob["port_start"])
-        print("Container smoke test passed: native CLI and control socket disabled, authentication, low ports, real single-protocol and combined TCP+UDP traffic, recreation recovery, combined enable/disable and protocol changes, listener release after deletion, independent portals, owner filtering, user isolation, persisted usage, and real quota exhaustion")
+        print("Container smoke test passed: service-only entrypoint, no CLI or control socket, authentication, low ports, real single-protocol and combined TCP+UDP traffic, recreation recovery, combined enable/disable and protocol changes, listener release after deletion, independent portals, owner filtering, user isolation, persisted usage, and real quota exhaustion")
     except Exception:
         logs = docker("logs", name, check=False)
         print(logs.stdout + logs.stderr, file=sys.stderr)

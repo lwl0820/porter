@@ -21,7 +21,7 @@ SCRIPT = (ROOT / "scripts/install.sh").read_text()
 REAL_PYTHON = shutil.which("python3")
 
 STUB = r'''#!/usr/bin/python3
-import json, os, pathlib, shutil, subprocess, sys
+import json, os, pathlib, shutil, subprocess, sys, signal
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 base = pathlib.Path(os.environ["CASE_DIR"])
@@ -68,7 +68,14 @@ elif name == "rm":
         sys.exit(1)
     if os.environ.get("CACHE_FRAGMENT") and any(arg.endswith("porter.service") for arg in args):
         enable("cached_fragment")
-    sys.exit(subprocess.run(["/usr/bin/rm", *args]).returncode)
+    code = subprocess.run(["/usr/bin/rm", *args]).returncode
+    if os.environ.get("KILL_UNINSTALL") == "unit" and any(arg.endswith("porter.service") for arg in args):
+        os.kill(os.getppid(), signal.SIGKILL); os.kill(os.getpid(), signal.SIGKILL)
+    sys.exit(code)
+elif name == "ln":
+    if os.environ.get("LINK_RACE"):
+        pathlib.Path(args[-1]).write_text("racing unknown file")
+    sys.exit(subprocess.run(["/usr/bin/ln", *args]).returncode)
 elif name == "groupadd":
     enable("group")
 elif name == "useradd":
@@ -84,6 +91,8 @@ elif name == "install":
         record = json.loads(state.read_text())
         if race in ("uninstalled", "purged"):
             (base / "program with spaces/porter").unlink()
+            (base / "program with spaces/porterd").unlink(missing_ok=True)
+            (base / "usr/bin/porter").unlink(missing_ok=True)
             (base / "etc/systemd/system/porter.service").unlink()
             (base / "enabled").unlink()
             enable("stopped")
@@ -136,7 +145,10 @@ elif name == "curl":
             target.write_text("0" * 64 + "  porter-v1.2.3-linux-amd64.tar.gz\n")
         if filename == "SHA256SUMS" and os.environ.get("DUPLICATE_SUM"):
             target.write_bytes(target.read_bytes() * 2)
-    elif os.environ.get("HEALTH_FAIL"):
+    elif os.environ.get("HEALTH_FAIL") or os.environ.get("UPGRADE_HEALTH_FAIL_ONCE"):
+        if os.environ.get("UPGRADE_HEALTH_FAIL_ONCE"):
+            (base / "data/new-sidecar").write_bytes(b"new version sidecar")
+            (base / "data/porter.db").write_bytes(b"new migrated db")
         sys.exit(1)
     else:
         if os.environ.get("EXIT_DURING_HEALTH"):
@@ -152,10 +164,12 @@ elif name == "systemctl":
             print("/usr/lib/systemd/system/porter.service")
         elif (base / "etc/systemd/system/porter.service").exists() or flag("cached_fragment"):
             print(base / "etc/systemd/system/porter.service")
-    elif args[0] == "enable":
+    elif args[0] in ("enable", "start"):
         if os.environ.get("START_FAIL"):
             sys.exit(1)
-        enable("enabled")
+        if args[0] == "enable":
+            enable("enabled")
+        enable("active")
         (base / "stopped").unlink(missing_ok=True)
         (base / "data/porter.db").touch()
     elif args[0] == "stop":
@@ -163,12 +177,15 @@ elif name == "systemctl":
             sys.exit(1)
         if not os.environ.get("STILL_ACTIVE"):
             enable("stopped")
+            (base / "active").unlink(missing_ok=True)
+        if os.environ.get("KILL_UNINSTALL") == "stop":
+            os.kill(os.getppid(), signal.SIGKILL); os.kill(os.getpid(), signal.SIGKILL)
     elif args[0] == "disable":
         if os.environ.get("DISABLE_FAIL"):
             sys.exit(1)
         (base / "enabled").unlink(missing_ok=True)
     elif args[0] == "is-active":
-        sys.exit(3 if os.environ.get("ACTIVE_FAIL") or flag("exited") or flag("stopped") or (not flag("enabled") and not os.environ.get("STILL_ACTIVE")) else 0)
+        sys.exit(3 if os.environ.get("ACTIVE_FAIL") or flag("exited") or flag("stopped") or (not flag("active") and not os.environ.get("STILL_ACTIVE")) else 0)
     elif args[0] == "is-enabled":
         sys.exit(1 if os.environ.get("ENABLED_FAIL") or not flag("enabled") else 0)
     elif args[0] == "daemon-reload":
@@ -196,10 +213,12 @@ class InstallCase(unittest.TestCase):
         (self.base / "run").mkdir()
         (self.base / "stub").write_text(STUB)
         (self.base / "stub").chmod(0o755)
-        for command in ("uname", "id", "sudo", "apt-get", "dnf", "systemctl", "sleep", "curl", "getent", "useradd", "groupadd", "userdel", "groupdel", "rm", "install"):
+        for command in ("uname", "id", "sudo", "apt-get", "dnf", "systemctl", "sleep", "curl", "getent", "useradd", "groupadd", "userdel", "groupdel", "rm", "install", "ln"):
             (self.bin / command).symlink_to(self.base / "stub")
         for command in ("env", "cat", "mktemp", "tee", "chmod", "mv", "rmdir", "mkdir", "realpath", "python3", "stty", "cmp", "cut", "test"):
             (self.bin / command).symlink_to(shutil.which(command))
+        self.command = self.base / "usr/bin/porter"
+        self.command.parent.mkdir(parents=True)
         self.directory = self.base / "program with spaces"
         self.config = self.etc / "porter/porter.env"
         self.state = self.etc / "porter/install.json"
@@ -230,6 +249,16 @@ class InstallCase(unittest.TestCase):
                 bundle.addfile(info, io.BytesIO(program) if info.isfile() else None)
                 if kind == "duplicate":
                     bundle.addfile(info, io.BytesIO(program))
+                if kind not in ("legacy", "missing-server"):
+                    server = tarfile.TarInfo("porterd")
+                    server.size = len(program)
+                    server.mode = 0o755
+                    if kind == "server-link":
+                        server.type = tarfile.SYMTYPE
+                        server.linkname = "porter"
+                    bundle.addfile(server, io.BytesIO(program) if server.isfile() else None)
+                    if kind == "duplicate-server":
+                        bundle.addfile(server, io.BytesIO(program))
             sums.append(hashlib.sha256((folder / name).read_bytes()).hexdigest() + "  " + name)
             assets.append({"name": name})
         (folder / "SHA256SUMS").write_text("\n".join(sums) + "\n")
@@ -247,7 +276,23 @@ class InstallCase(unittest.TestCase):
         return [("管理员用户名：", username), ("管理员密码：", password), ("确认密码：", password), ("Web 监听地址", listen)]
     def run_install(self, dialogue=None, args=(), terminal=True, language="zh-CN", directory=True):
         # 仅改写测试副本中的宿主路径，生产脚本不提供绕过系统检测的环境变量。
-        script = SCRIPT.replace("/etc/", str(self.etc) + "/").replace("/var/lib/porter", str(self.base / "data")).replace("/proc/1/comm", str(self.base / "proc1")).replace("/run/systemd/system", str(self.base / "run"))
+        script = SCRIPT.replace("/usr/bin/porter", str(self.command)).replace("/etc/", str(self.etc) + "/").replace("/var/lib/porter", str(self.base / "data")).replace("/proc/1/comm", str(self.base / "proc1")).replace("/run/systemd/system", str(self.base / "run"))
+        script = script.replace(".st_uid != 0", ".st_uid != os.getuid()")
+        script = script.replace('while current != "/":', 'while current not in ("/", ' + json.dumps(str(self.base)) + '):')
+        if self.env.get("KILL_PHASE"):
+            script = script.replace('transaction["phase"] = phase', 'transaction["phase"] = phase').replace('atomic_json(os.path.join(folder, "transaction.json"), transaction)\n    def service_intent', 'atomic_json(os.path.join(folder, "transaction.json"), transaction)\n        if phase == os.environ.get("KILL_PHASE"):\n            os.kill(os.getppid(), signal.SIGKILL)\n            os.kill(os.getpid(), signal.SIGKILL)\n    def service_intent')
+        if self.env.get("FAULT_BOUNDARY"):
+            script = script.replace("    def mark(phase):", "    fault_seen = False\n    def mark(phase):")
+            script = script.replace("        os.replace(temporary, target)", "        os.replace(temporary, target)\n        nonlocal fault_seen\n        boundary = os.environ.get(\"FAULT_BOUNDARY\")\n        if not fault_seen and ((boundary == \"porter\" and target.endswith(\"/porter\")) or (boundary == \"porterd\" and target.endswith(\"/porterd\")) or (boundary == \"unit\" and target.endswith(\"/porter.service\"))):\n            fault_seen = True\n            raise OSError(\"injected replacement failure\")")
+            script = script.replace('copy_data(data, os.path.join(folder, "data"))', 'copy_data(data, os.path.join(folder, "data"))\n        if os.environ.get("FAULT_BOUNDARY") == "backup":\n            raise OSError("injected backup failure")')
+            script = script.replace("        atomic_json(statepath, new)", '        if os.environ.get("FAULT_BOUNDARY") == "state":\n            raise OSError("injected state failure")\n        atomic_json(statepath, new)')
+        if self.env.get("SIGNAL_PHASE"):
+            script = script.replace('atomic_json(os.path.join(folder, "transaction.json"), transaction)\n    def service_intent', 'atomic_json(os.path.join(folder, "transaction.json"), transaction)\n        if phase == os.environ.get("SIGNAL_PHASE"):\n            os.kill(os.getppid(), signal.SIGTERM)\n            time.sleep(1)\n    def service_intent')
+        if self.env.get("MOUNT_FIXTURE"):
+            script = script.replace('"/proc/self/mountinfo"', json.dumps(str(self.base / "mountinfo")))
+            if self.env.get("MOUNT_AFTER_LOCK"):
+                insertion = 'json.dump({"pid": int(pid), "start": start}, file)\n        if path == ' + json.dumps(str(self.config.parent / ".install-lock")) + ":\n            with open(" + json.dumps(str(self.base / "mountinfo")) + ", \"a\") as mounted:\n                mounted.write(" + json.dumps(self.env["MOUNT_AFTER_LOCK"]) + ")"
+                script = script.replace('json.dump({"pid": int(pid), "start": start}, file)', insertion)
         argv = ["/bin/bash", "-s", "--"]
         if language is not None:
             argv.extend(("--lang", language))
@@ -330,7 +375,7 @@ class InstallCase(unittest.TestCase):
     def snapshot(self):
         return {str(path.relative_to(self.base)): path.read_bytes()
                 for folder in (self.config.parent, self.base / "data")
-                for path in folder.rglob("*") if path.is_file()}
+                for path in folder.rglob("*") if path.is_file() and ".install-lock" not in path.parts}
 
     def test_languages_help_validation_and_selection(self):
         for language, marker in (("zh-CN", "原生交互安装"), ("en", "native interactive installer")):
@@ -347,7 +392,7 @@ class InstallCase(unittest.TestCase):
             self.assertNotEqual(code, 0, output)
             self.assertIn(text, output)
             self.assertFalse(self.directory.exists())
-        dialogue = [("Language", "2"), ("Admin username:", "admin"),
+        dialogue = [("Language", "1"), ("Admin username:", "admin"),
                     ("Admin password:", "one"), ("Confirm password:", "two"),
                     ("Admin password:", "english-secret"), ("Confirm password:", "english-secret"),
                     ("Web listen address", "bad"), ("Web listen address", "[::]:18080")]
@@ -360,7 +405,9 @@ class InstallCase(unittest.TestCase):
         self.assertNotIn("english-secret", output)
         self.assertTrue(self.terminal_echo_restored)
         self.reset_installation()
-        self.assert_success([("Language", ""), *self.dialogue()], language=None)
+        code, output = self.run_install([("Language", ""), ("Admin username:", "admin"), ("Admin password:", "secret"), ("Confirm password:", "secret"), ("Web listen address", "0.0.0.0:18080")], language=None)
+        self.assertEqual(code, 0, output)
+        self.assertIn("Porter is ready", output)
 
     def test_uninstall_retains_all_data_and_reinstalls_recorded_version(self):
         self.assert_success()
@@ -424,6 +471,10 @@ class InstallCase(unittest.TestCase):
         code, output = self.uninstall(True, language="en", directory=False)
         self.assertEqual(code, 0, output)
         self.assertIn("Porter has been purged", output)
+        self.assertIn("Historical upgrade backups may contain credentials", output)
+        self.assertIn(str(self.directory / ".tmp"), output)
+        self.assertIn(str(self.base) + "/.porter-failed-upgrade.<id>", output)
+        self.assertIn("business data", output)
         for path in (self.config, self.state, self.unit, self.base / "data", self.base / "user", self.base / "group", self.directory / "porter"):
             self.assertFalse(path.exists(), str(path))
         self.assertTrue((self.directory / "notes.txt").exists())
@@ -726,10 +777,11 @@ class InstallCase(unittest.TestCase):
                 self.reset_installation()
 
     def reset_installation(self):
+        self.command.unlink(missing_ok=True)
         for path in (self.directory, self.etc / "porter", self.base / "data"):
             if path.exists():
                 shutil.rmtree(path)
-        for path in (self.unit, self.base / "calls", self.base / "user", self.base / "group", self.base / "enabled", self.base / "exited", self.base / "stopped", self.base / "cached_fragment"):
+        for path in (self.unit, self.base / "calls", self.base / "user", self.base / "group", self.base / "enabled", self.base / "active", self.base / "exited", self.base / "stopped", self.base / "cached_fragment"):
             path.unlink(missing_ok=True)
 
     def test_repeat_keeps_binary_credentials_and_data_without_network(self):
@@ -963,6 +1015,408 @@ class InstallCase(unittest.TestCase):
                 self.assertFalse(any("enable" in call for call in self.actions("systemctl")))
                 self.reset_installation()
 
+
+    def upgrade(self, version="v1.3.0", answers=None, **kwargs):
+        self.fixtures(version=version)
+        return self.run_install(dialogue=[("输入 yes 确认升级", "yes")] if answers is None else answers,
+                                args=("--upgrade", "--version", version), **kwargs)
+
+    def legacy(self, version="v0.3.0"):
+        self.assert_success()
+        self.command.unlink()
+        (self.directory / "porterd").unlink()
+        program = self.directory / "porter"
+        program.write_text(f'#!/bin/sh\nif [ "$1" = --version ]; then echo {version}; exit 0; fi\nexit 0\n')
+        program.chmod(0o755)
+        self.state.write_text(json.dumps({"schema": 1, "directory": str(self.directory), "arch": "amd64", "version": version, "status": "complete"}))
+        self.state.chmod(0o600)
+        text = self.unit.read_text().replace('/porterd"', '/porter"')
+        self.unit.write_text(text)
+
+    def test_split_layout_path_and_link_ownership(self):
+        self.assert_success()
+        state = json.loads(self.state.read_text())
+        self.assertEqual((state["schema"], state["layout"], state["command_link"]), (2, "split", str(self.command)))
+        self.assertEqual(os.readlink(self.command), str(self.directory / "porter"))
+        result = subprocess.run([str(self.command), "--version"], capture_output=True, text=True, env={"PATH": str(self.command.parent)})
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "v1.2.3"))
+        self.assertIn("/porterd", self.unit.read_text())
+        self.command.unlink()
+        self.env["DOWNLOAD_FAIL"] = "1"
+        self.assert_success(terminal=False)
+        self.assertTrue(self.command.is_symlink())
+        for kind in ("file", "directory", "dangling", "different"):
+            self.command.unlink()
+            if kind == "file":
+                self.command.write_text("unknown")
+            elif kind == "directory":
+                self.command.mkdir()
+            else:
+                self.command.symlink_to(self.base / kind)
+            before = self.snapshot()
+            (self.base / "calls").unlink()
+            code, output = self.uninstall(True, answers=[])
+            self.assertNotEqual(code, 0, output)
+            self.assertEqual(before, self.snapshot())
+            self.assertFalse(any(call[0] == "stop" for call in self.actions("systemctl")))
+            if kind == "directory":
+                self.command.rmdir()
+            else:
+                self.command.unlink()
+            self.command.symlink_to(self.directory / "porter")
+
+    def test_unknown_same_target_link_is_not_adopted(self):
+        self.command.symlink_to(self.directory / "porter")
+        code, output = self.run_install()
+        self.assertNotEqual(code, 0, output)
+        self.assertFalse(self.state.exists())
+        self.assertTrue(self.command.is_symlink())
+
+    def test_direct_system_directory_has_no_self_link(self):
+        self.directory = self.command.parent
+        self.assert_success()
+        self.assertFalse(self.command.is_symlink())
+        self.assertNotIn("command_link", json.loads(self.state.read_text()))
+        code, output = self.uninstall()
+        self.assertEqual(code, 0, output)
+        self.assertFalse(self.command.exists() or (self.directory / "porterd").exists())
+
+    def test_cli_preference_retained_and_purged_precisely(self):
+        self.assert_success()
+        preference = self.config.parent / "cli.json"
+        preference.write_text('{"schema":1,"language":"zh-CN"}')
+        preference.chmod(0o600)
+        pending = preference.parent / (".cli-" + "a" * 24 + ".new")
+        pending.write_text("partial")
+        pending.chmod(0o600)
+        unknown = preference.parent / "notes.txt"
+        unknown.write_text("unknown")
+        self.assertEqual(self.uninstall()[0], 0)
+        self.assertTrue(preference.exists() and pending.exists())
+        self.assert_success(terminal=False)
+        code, output = self.uninstall(True)
+        self.assertEqual(code, 0, output)
+        self.assertIn("历史升级备份可能包含凭据", output)
+        self.assertIn(str(self.directory / ".tmp"), output)
+        self.assertIn(str(self.base) + "/.porter-failed-upgrade.<标识>", output)
+        self.assertIn("业务数据", output)
+        self.assertFalse(preference.exists() or pending.exists() or self.config.exists() or self.state.exists())
+        self.assertEqual(unknown.read_text(), "unknown")
+
+    def test_cli_config_conflicts_refuse_before_stop(self):
+        self.assert_success()
+        preference = self.config.parent / "cli.json"
+        for kind in ("directory", "symlink", "permissions", "schema"):
+            if kind == "directory":
+                preference.mkdir()
+            elif kind == "symlink":
+                preference.symlink_to(self.config)
+            else:
+                preference.write_text('{"schema":7,"language":"en"}' if kind == "schema" else '{"schema":1,"language":"en"}')
+                preference.chmod(0o644 if kind == "permissions" else 0o600)
+            (self.base / "calls").unlink()
+            code, output = self.uninstall(True, answers=[])
+            self.assertNotEqual(code, 0, output)
+            self.assertFalse(any(call[0] == "stop" for call in self.actions("systemctl")))
+            if kind == "directory":
+                preference.rmdir()
+            else:
+                preference.unlink()
+
+    def test_legacy_repeat_restore_and_explicit_migration(self):
+        self.legacy()
+        database = self.base / "data/porter.db"
+        database.write_bytes(b"accounts rules statistics")
+        (self.base / "data/porter.db-wal").write_bytes(b"wal")
+        before = self.config.read_bytes()
+        self.env["DOWNLOAD_FAIL"] = "1"
+        output = self.assert_success(terminal=False)
+        self.assertIn("旧单程序", output)
+        self.assertFalse(self.command.exists() or (self.directory / "porterd").exists())
+        del self.env["DOWNLOAD_FAIL"]
+        code, output = self.upgrade()
+        self.assertEqual(code, 0, output)
+        self.assertEqual(database.read_bytes(), b"accounts rules statistics")
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertEqual((self.base / "data/porter.db-wal").read_bytes(), b"wal")
+        self.assertEqual(json.loads(self.state.read_text())["schema"], 2)
+        self.assertTrue(self.command.is_symlink())
+        backups = list((self.directory / ".tmp").glob("upgrade.*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(json.loads((backups[0] / "install.json").read_text())["schema"], 1)
+        self.assertEqual((backups[0] / "data/porter.db").read_bytes(), b"accounts rules statistics")
+        self.assertEqual(backups[0].stat().st_mode & 0o777, 0o700)
+
+    def test_legacy_retained_reinstall_uses_legacy_archive(self):
+        self.legacy("v0.2.0")
+        self.assertEqual(self.uninstall()[0], 0)
+        self.fixtures(kind="legacy", version="v0.2.0")
+        self.assert_success(terminal=False)
+        self.assertEqual(json.loads(self.state.read_text())["schema"], 1)
+        self.assertFalse(self.command.exists() or (self.directory / "porterd").exists())
+
+    def test_upgrade_cancel_network_checksum_and_legacy_target_do_not_stop(self):
+        self.assert_success()
+        for failure in ("DOWNLOAD_FAIL", "BAD_CHECKSUM", "DUPLICATE_SUM", "legacy", "cancel"):
+            self.fixtures(kind="legacy" if failure == "legacy" else "normal", version="v1.3.0")
+            if failure in ("DOWNLOAD_FAIL", "BAD_CHECKSUM", "DUPLICATE_SUM"):
+                self.env[failure] = "1"
+            before = self.snapshot()
+            (self.base / "calls").unlink()
+            code, output = self.run_install(dialogue=[("输入 yes 确认升级", "")] if failure == "cancel" else [], args=("--upgrade",))
+            self.assertEqual(code == 0, failure == "cancel", output)
+            self.assertEqual(self.snapshot(), before)
+            self.assertFalse(any(call[0] == "stop" for call in self.actions("systemctl")))
+            self.env.pop(failure, None)
+
+    def test_semver_comparison_and_upgrade_idempotence(self):
+        helper = SCRIPT.split("PY_HELPER='", 1)[1].split("\n'\npy()", 1)[0]
+        namespace = {}
+        exec(helper.split("\ntry:\n", 1)[0], namespace)
+        compare = namespace["compare_versions"]
+        order = ["v1.0.0-alpha", "v1.0.0-alpha.1", "v1.0.0-alpha.beta", "v1.0.0-beta", "v1.0.0-beta.2", "v1.0.0-beta.11", "v1.0.0-rc.1", "v1.0.0", "v1.0.1", "v2.0.0"]
+        for left, right in zip(order, order[1:]):
+            self.assertLess(compare(left, right), 0)
+            self.assertGreater(compare(right, left), 0)
+        for value in ("v01.2.3", "v1.2.3-01", "v1.2.3-a..b"):
+            with self.assertRaises(ValueError):
+                compare(value, "v1.2.3")
+        self.assert_success()
+        (self.base / "calls").unlink()
+        code, output = self.upgrade(version="v1.2.3", terminal=False)
+        self.assertEqual(code, 0, output)
+        self.assertFalse(any(call[0] in ("stop", "start", "enable") for call in self.actions("systemctl")))
+        code, output = self.upgrade(version="v1.2.2", answers=[])
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("拒绝降级", output)
+
+    def test_upgrade_restore_complete_data_and_original_service_intent(self):
+        for inactive in (False, True):
+            self.fixtures()
+            self.assert_success()
+            if inactive:
+                (self.base / "stopped").touch()
+                (self.base / "enabled").unlink()
+                (self.base / "active").unlink()
+            (self.base / "data/porter.db").write_bytes(b"old-db")
+            (self.base / "data/porter.db-wal").write_bytes(b"old-wal")
+            before = self.snapshot()
+            self.env["UPGRADE_HEALTH_FAIL_ONCE"] = "1"
+            code, output = self.upgrade()
+            self.assertNotEqual(code, 0, output)
+            self.assertIn("已恢复原版本", output)
+            self.assertEqual(self.snapshot(), before)
+            self.assertEqual((self.base / "enabled").exists(), not inactive)
+            self.assertEqual((self.base / "active").exists(), not inactive)
+            self.assertEqual(json.loads(self.state.read_text())["version"], "v1.2.3")
+            del self.env["UPGRADE_HEALTH_FAIL_ONCE"]
+            self.reset_installation()
+
+    def test_upgrade_strong_interrupt_recovery_all_persistent_phases(self):
+        for phase in ("stopped", "backup_complete", "switching"):
+            self.legacy()
+            (self.base / "data/porter.db").write_bytes(b"old-db")
+            before = self.snapshot()
+            self.env["KILL_PHASE"] = phase
+            code, output = self.upgrade()
+            self.assertNotEqual(code, 0, output)
+            self.assertEqual(json.loads(self.state.read_text())["status"], "upgrading")
+            del self.env["KILL_PHASE"]
+            code, output = self.run_install(terminal=False)
+            self.assertEqual(code, 0, output)
+            self.assertIn("已恢复稳定安装", output)
+            self.assertEqual(self.snapshot(), before)
+            self.assertFalse(self.command.exists() or (self.directory / "porterd").exists())
+            self.assertTrue((self.base / "active").exists())
+            self.reset_installation()
+
+    def test_lock_metadata_invalid_and_active_owners_are_not_reclaimed(self):
+        self.assert_success()
+        lock = self.config.parent / ".install-lock"
+        with open("/proc/" + str(os.getpid()) + "/stat") as file:
+            current = file.read().rsplit(")", 1)[1].split()[19]
+        records = [{"pid": 0}, {"pid": True, "start": None}, {"pid": -1, "start": "1"}, {"pid": 99999999, "start": ""}, {"pid": 99999999, "start": "1", "unknown": 1}, {"pid": os.getpid(), "start": current}]
+        for record in records:
+            lock.mkdir(mode=0o700)
+            owner = lock / "owner.json"
+            owner.write_text(json.dumps(record))
+            owner.chmod(0o600)
+            before = owner.read_bytes()
+            code, output = self.run_install(terminal=False)
+            self.assertNotEqual(code, 0, output)
+            self.assertEqual(owner.read_bytes(), before)
+            owner.unlink(); lock.rmdir()
+        lock.mkdir(mode=0o700)
+        (lock / "owner.json").write_text(json.dumps({"pid": 99999999, "start": "1"}))
+        (lock / "owner.json").chmod(0o600)
+        self.assert_success(terminal=False)
+        self.assertFalse(lock.exists())
+
+    def test_archive_both_members_required_unique_and_regular(self):
+        for kind in ("missing-server", "server-link", "duplicate-server"):
+            self.fixtures(kind=kind)
+            code, output = self.run_install()
+            self.assertNotEqual(code, 0, output)
+            self.assertFalse(self.state.exists() or self.unit.exists())
+            self.reset_installation()
+
+    def test_upgrade_success_preserves_stopped_disabled_intent_and_cli(self):
+        self.assert_success()
+        (self.base / "stopped").touch()
+        (self.base / "enabled").unlink()
+        (self.base / "active").unlink()
+        cli = self.config.parent / "cli.json"
+        cli.write_text('{"schema":1,"language":"zh-CN"}')
+        cli.chmod(0o600)
+        code, output = self.upgrade()
+        self.assertEqual(code, 0, output)
+        self.assertFalse((self.base / "enabled").exists() or (self.base / "active").exists())
+        self.assertEqual(cli.read_text(), '{"schema":1,"language":"zh-CN"}')
+        backup = next((self.directory / ".tmp").glob("upgrade.*"))
+        self.assertEqual((backup / "cli.json").read_bytes(), cli.read_bytes())
+
+    def test_upgrade_failure_at_replacement_and_backup_boundaries_recovers(self):
+        for boundary in ("backup", "porter", "porterd", "unit", "state"):
+            self.fixtures()
+            self.legacy()
+            (self.base / "data/porter.db").write_bytes(b"old database")
+            (self.directory / "porter").chmod(0o750)
+            self.unit.chmod(0o640)
+            before = self.snapshot()
+            metadata = {str(path): (path.stat().st_uid, path.stat().st_gid, path.stat().st_mode & 0o777) for path in (self.directory / "porter", self.unit, self.config, self.state, self.base / "data", self.base / "data/porter.db")}
+            self.env["FAULT_BOUNDARY"] = boundary
+            code, output = self.upgrade()
+            self.assertNotEqual(code, 0, output)
+            self.assertIn("已恢复原版本", output)
+            self.assertEqual(before, self.snapshot())
+            self.assertFalse(self.command.exists() or (self.directory / "porterd").exists())
+            self.assertEqual(metadata, {str(Path(path)): (Path(path).stat().st_uid, Path(path).stat().st_gid, Path(path).stat().st_mode & 0o777) for path in metadata})
+            del self.env["FAULT_BOUNDARY"]
+            self.reset_installation()
+
+    def test_upgrade_rollback_interruption_can_resume(self):
+        for phase in ("restoring", "restored"):
+            self.fixtures()
+            self.legacy()
+            (self.base / "data/porter.db").write_bytes(b"old-db")
+            before = self.snapshot()
+            self.env["UPGRADE_HEALTH_FAIL_ONCE"] = "1"
+            self.env["KILL_PHASE"] = phase
+            code, output = self.upgrade()
+            self.assertNotEqual(code, 0, output)
+            self.assertEqual(json.loads(self.state.read_text())["status"], "upgrading")
+            del self.env["KILL_PHASE"]
+            del self.env["UPGRADE_HEALTH_FAIL_ONCE"]
+            code, output = self.run_install(terminal=False)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot(), before)
+            self.assertTrue((self.base / "active").exists())
+            self.reset_installation()
+
+    def test_upgrade_recovery_after_systemctl_failure(self):
+        for failure in ("STOP_FAIL", "RELOAD_FAIL", "START_FAIL"):
+            self.fixtures()
+            self.legacy()
+            before = self.snapshot()
+            self.env[failure] = "1"
+            code, output = self.upgrade()
+            self.assertNotEqual(code, 0, output)
+            self.assertEqual(json.loads(self.state.read_text())["status"], "upgrading")
+            del self.env[failure]
+            code, output = self.run_install(terminal=False)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot(), before)
+            self.assertTrue((self.base / "active").exists())
+            self.reset_installation()
+
+    def test_corrupted_upgrade_metadata_refuses_before_stop(self):
+        self.legacy()
+        self.env["KILL_PHASE"] = "switching"
+        self.assertNotEqual(self.upgrade()[0], 0)
+        del self.env["KILL_PHASE"]
+        record = json.loads(self.state.read_text())
+        journal = self.directory / ".tmp" / record["upgrade_id"] / "transaction.json"
+        value = json.loads(journal.read_text())
+        del value["cli"]
+        journal.write_text(json.dumps(value))
+        before = self.snapshot()
+        (self.base / "calls").unlink()
+        code, output = self.run_install(terminal=False)
+        self.assertNotEqual(code, 0, output)
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(any(call[0] == "stop" for call in self.actions("systemctl")))
+
+    def test_atomic_link_race_does_not_overwrite_unknown_node(self):
+        self.env["LINK_RACE"] = "1"
+        code, output = self.run_install()
+        self.assertNotEqual(code, 0, output)
+        self.assertEqual(self.command.read_text(), "racing unknown file")
+        self.assertFalse(self.command.is_symlink())
+        self.assertEqual(json.loads(self.state.read_text())["status"], "initializing")
+
+    def test_uninstall_sigkill_can_resume_without_abandoning_global_lock(self):
+        for boundary in ("stop", "unit"):
+            self.fixtures()
+            self.assert_success()
+            self.env["KILL_UNINSTALL"] = boundary
+            code, output = self.uninstall()
+            self.assertNotEqual(code, 0, output)
+            self.assertEqual(json.loads(self.state.read_text())["status"], "uninstalling")
+            del self.env["KILL_UNINSTALL"]
+            code, output = self.uninstall()
+            self.assertEqual(code, 0, output)
+            self.assertEqual(json.loads(self.state.read_text())["status"], "uninstalled")
+            self.assertFalse((self.config.parent / ".install-lock").exists())
+            self.reset_installation()
+
+    def test_upgrade_shell_sigterm_waits_for_rollback(self):
+        self.legacy()
+        before = self.snapshot()
+        self.env["SIGNAL_PHASE"] = "stopped"
+        code, output = self.upgrade()
+        self.assertNotEqual(code, 0, output)
+        self.assertEqual(json.loads(self.state.read_text())["status"], "complete")
+        self.assertEqual(before, self.snapshot())
+        self.assertFalse((self.config.parent / ".install-lock").exists())
+        self.assertTrue((self.base / "active").exists())
+
+    def test_upgrade_rejects_data_mount_root_before_stop_and_rechecks_under_lock(self):
+        self.assert_success()
+        before = self.snapshot()
+        mountinfo = self.base / "mountinfo"
+        data = str(self.base / "data")
+        root_line = "1 0 0:1 / / rw - tmpfs tmpfs rw\n"
+        mounted_line = "2 1 0:1 / " + data.replace(" ", "\\040") + " rw - tmpfs tmpfs rw\n"
+        self.env["MOUNT_FIXTURE"] = "1"
+        for locked in (False, True):
+            mountinfo.write_text(root_line if locked else root_line + mounted_line)
+            if locked:
+                self.env["MOUNT_AFTER_LOCK"] = mounted_line
+            (self.base / "calls").unlink()
+            code, output = self.upgrade(answers=[("输入 yes 确认升级", "yes")] if locked else [])
+            self.assertNotEqual(code, 0, output)
+            self.assertIn("挂载根", output)
+            self.assertEqual(self.snapshot(), before)
+            self.assertFalse(any(call[0] == "stop" for call in self.actions("systemctl")))
+            self.env.pop("MOUNT_AFTER_LOCK", None)
+        self.env.pop("MOUNT_FIXTURE")
+
+    def test_mountinfo_parent_filesystem_allowed_and_escaped_mountpoint_decoded(self):
+        helper = SCRIPT.split("PY_HELPER='", 1)[1].split("\n'\npy()", 1)[0]
+        mountinfo = self.base / "mountinfo"
+        helper = helper.replace('"/proc/self/mountinfo"', json.dumps(str(mountinfo)))
+        namespace = {}
+        exec(helper.split("\ntry:\n", 1)[0], namespace)
+        check = namespace["check_data_mount"]
+        mountinfo.write_text("1 0 0:1 / / rw - tmpfs tmpfs rw\n2 1 0:2 / /var rw - ext4 /dev/disk rw\n")
+        check("/var/lib/porter")
+        mountinfo.write_text("1 0 0:1 / /var/lib/porter\\040data rw - tmpfs tmpfs rw\n")
+        with self.assertRaises(ValueError):
+            check("/var/lib/porter data")
+        for text in ("", "malformed\n"):
+            mountinfo.write_text(text)
+            with self.assertRaises(ValueError):
+                check("/var/lib/porter")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

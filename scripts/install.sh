@@ -4,7 +4,7 @@ set +x
 set -Eeuo pipefail
 umask 077
 
-LANGUAGE=zh-CN
+LANGUAGE=en
 message() {
     local key=$1 format=$1
     shift
@@ -103,6 +103,22 @@ message() {
             '\nPorter 已就绪\n用户入口：%s/user/\n管理员入口：%s/admin/\n通配监听时，远程访问请改用服务器 IP。\n') format='\nPorter is ready\nUser portal: %s/user/\nAdmin portal: %s/admin/\nFor remote access with a wildcard listen address, use the server IP.\n' ;;
             '配置：%s（权限 600）；数据：%s；程序：%s\n') format='Configuration: %s (mode 600); data: %s; program: %s\n' ;;
             '日志：%sjournalctl -u porter.service -f\n停止：%ssystemctl stop porter.service\n启动：%ssystemctl start porter.service\n') format='Logs: %sjournalctl -u porter.service -f\nStop: %ssystemctl stop porter.service\nStart: %ssystemctl start porter.service\n' ;;
+            '卸载不能指定 --upgrade。') format='--upgrade cannot be used with --uninstall.' ;;
+            'CLI 配置类型、属主或权限无效。') format='CLI configuration type, ownership or permissions are invalid.' ;;
+            '系统命令入口存在未知文件、链接或不可信目录。') format='System command conflicts with an unknown file, link or untrusted directory.' ;;
+            '系统命令入口创建失败，未覆盖已有文件。') format='Cannot create the system command; existing files were not overwritten.' ;;
+            '版本：%s；服务：%s；命令：%s rules（需要 root 或 sudo）。\n') format='Version: %s; service: %s; command: %s rules (requires root or sudo).\n' ;;
+            '版本：%s；旧单程序布局不包含独立命令行工具。请使用 --upgrade 显式升级。\n') format='Version: %s; legacy layout has no standalone CLI. Use --upgrade to migrate explicitly.\n' ;;
+            '升级恢复失败；请检查安装记录及备份后重试。') format='Upgrade recovery failed; inspect the installation record and backup before retrying.' ;;
+            '已恢复稳定安装，请重新运行所需安装、升级或卸载命令。\n') format='Stable installation restored. Run the desired install, upgrade or uninstall command again.\n' ;;
+            '--upgrade 需要已完成的托管安装。') format='--upgrade requires a completed managed installation.' ;;
+            '目标版本无效或低于当前版本，拒绝降级。') format='Target version is invalid or older than the installed version; downgrade refused.' ;;
+            '发行包摘要不符或缺少唯一的双程序普通文件。') format='Archive checksum mismatch or missing unique regular porter and porterd programs.' ;;
+            '升级需要可交互终端，请在 SSH 终端运行。') format='Upgrade requires an interactive terminal. Run it in an SSH terminal.' ;;
+            '将从 %s 升级到 %s，期间短暂停服并备份完整配置和数据。\n输入 yes 确认升级，回车取消：') format='Upgrade from %s to %s, with a brief outage and a full configuration and data backup.\nType yes to confirm upgrade, or Enter to cancel: ' ;;
+            '升级失败，已尝试恢复原版本；请查看恢复诊断。') format='Upgrade failed; recovery of the original version was attempted. Check the recovery diagnostics.' ;;
+            '历史升级备份可能包含凭据，仍保留在 %s；失败数据副本可能包含业务数据，仍保留在 %s/.porter-failed-upgrade.<标识> 中。请核对清理。\n') format='Historical upgrade backups may contain credentials and remain at %s; failed data copies may contain business data and remain at %s/.porter-failed-upgrade.<id>. Review and clean them manually.\n' ;;
+            '数据目录本身是挂载根或无法校验挂载信息，不能安全执行升级回退。') format='The data directory is a mount root or mount information cannot be verified; upgrade rollback would be unsafe.' ;;
             *) format='Operation failed.' ;;
         esac
     fi
@@ -114,11 +130,15 @@ help() {
         cat <<'HELP'
 Porter native interactive installer and uninstaller
 Usage: bash install.sh [--install-dir /opt/porter] [--version v1.0.0] [--lang zh-CN|en]
+       bash install.sh --upgrade [--version v1.0.0] [--install-dir /opt/porter] [--lang zh-CN|en]
        bash install.sh --uninstall [--purge] [--install-dir /opt/porter] [--lang zh-CN|en]
 Install the latest stable GitHub Release; enter an admin username, hidden password and Web IP:port.
 Supports Ubuntu 22.04/24.04, Debian 12/13, RHEL/Rocky/AlmaLinux 9/10, amd64/arm64.
 Requires systemd as PID 1 and root or sudo; no Docker or compiler needed.
-Repeating installation keeps the program, configuration and data; it does not upgrade.
+Repeating installation keeps the version and layout; --upgrade explicitly migrates or upgrades.
+Native releases contain porterd (service) and porter (CLI), with /usr/bin/porter on PATH.
+Initial language selection: 1 English, 2 Chinese; Enter defaults to English.
+CLI preferences in /etc/porter/cli.json are independent and retained by normal uninstall.
 Uninstall keeps configuration, all database files and the service account by default.
 --purge additionally deletes configuration, data and the service account after a second confirmation.
 Reinstall after uninstall restores the recorded version and retained configuration/data.
@@ -128,11 +148,16 @@ HELP
         cat <<'HELP'
 Porter 原生交互安装与卸载器
 用法：bash install.sh [--install-dir /opt/porter] [--version v1.0.0] [--lang zh-CN|en]
+      bash install.sh --upgrade [--version v1.0.0] [--install-dir /opt/porter] [--lang zh-CN|en]
       bash install.sh --uninstall [--purge] [--install-dir /opt/porter] [--lang zh-CN|en]
 默认下载最新正式 GitHub Release；首次输入用户名、隐藏密码及完整 Web IP:端口。
 支持 Ubuntu 22.04/24.04、Debian 12/13、RHEL/Rocky/AlmaLinux 9/10，amd64/arm64。
 要求 systemd 为 PID 1，以及 root 或 sudo 权限；无需 Docker 或编译工具。
-重复运行保留程序、配置和数据，不自动升级；目录不支持引号或反斜线。
+重复运行保留版本与布局；--upgrade 显式升级或迁移。
+原生产物包含 porterd 服务与 porter 客户端，系统命令 /usr/bin/porter。
+首次语言选择：1 英文、2 中文，回车默认英文。
+CLI 独立偏好 /etc/porter/cli.json 在普通卸载时保留。
+目录不支持引号或反斜线。
 卸载默认保留配置、完整数据库和服务账号；--purge 额外确认后彻底删除。
 卸载后重新安装会复用记录版本和保留的数据；--version 不能与 --uninstall 同用。
 HELP
@@ -147,12 +172,12 @@ open_terminal() {
 select_language() {
     [[ $LANGUAGE_EXPLICIT == 0 ]] || return 0
     if open_terminal; then
-        printf '语言 / Language [1 中文, 2 English] (1): ' >&3
+        printf 'Language / 语言 [1 English, 2 中文] (1): ' >&3
         local answer
         IFS= read -r answer <&3 || fail '终端输入已结束。'
         case "$answer" in
-            ''|1|zh-CN) LANGUAGE=zh-CN ;;
-            2|en) LANGUAGE=en ;;
+            ''|1|en) LANGUAGE=en ;;
+            2|zh-CN) LANGUAGE=zh-CN ;;
             *) fail '语言必须是 zh-CN 或 en。' ;;
         esac
     fi
@@ -160,7 +185,7 @@ select_language() {
 
 # 使用标准库校验地址、产物与安装状态；凭据只经标准输入传递。
 PY_HELPER='
-import hashlib, ipaddress, json, os, re, sys, tarfile
+import hashlib, ipaddress, json, os, re, sys, tarfile, stat, shutil, subprocess, time, uuid, signal, fcntl
 VERSION = r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?"
 
 def address(value):
@@ -194,6 +219,285 @@ def read_environment(text):
         raise ValueError()
     return values
 
+def regular(path):
+    info = os.lstat(path)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1:
+        raise ValueError()
+    return info
+
+def trusted_parent(path):
+    current = os.path.dirname(os.path.abspath(path))
+    while current != "/":
+        info = os.lstat(current)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o022:
+            raise ValueError()
+        current = os.path.dirname(current)
+
+def check_cli(path):
+    if os.path.lexists(path):
+        info = regular(path)
+        if stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 4096:
+            raise ValueError()
+        with open(path) as file:
+            value = json.load(file)
+        if set(value) != {"schema", "language"} or type(value["schema"]) is not int or value["schema"] != 1 or value["language"] not in ("en", "zh-CN"):
+            raise ValueError()
+
+def check_data_mount(path):
+    # 同一文件系统上的 bind mount 也不能整体rename；不能仅依赖ismount/st_dev。
+    with open("/proc/self/mountinfo", encoding="utf-8", errors="surrogateescape") as file:
+        lines = file.readlines()
+    if not lines:
+        raise ValueError()
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 10 or " - " not in line or not fields[0].isdigit() or not fields[1].isdigit():
+            raise ValueError()
+        mountpoint = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), fields[4])
+        if not mountpoint.startswith("/") or os.path.normpath(mountpoint) == os.path.abspath(path):
+            raise ValueError()
+
+def validate_state(state, directory, arch):
+    if not isinstance(state, dict):
+        raise ValueError()
+    schema = state.get("schema")
+    if type(schema) is not int or schema not in (1, 2) or state["directory"] != directory or state["arch"] != arch or not re.fullmatch(VERSION, state["version"]) or state["status"] not in ("initializing", "complete", "uninstalling", "uninstalled", "upgrading"):
+        raise ValueError()
+    allowed = {"schema", "directory", "arch", "version", "status", "upgrade_id"}
+    if schema == 2:
+        allowed |= {"layout", "command_link"}
+    if set(state) - allowed:
+        raise ValueError()
+    if schema == 2 and state.get("layout") != "split":
+        raise ValueError()
+    if "command_link" in state and (schema != 2 or state["command_link"] != "/usr/bin/porter" or directory + "/porter" == "/usr/bin/porter"):
+        raise ValueError()
+    if state["status"] == "upgrading":
+        if not re.fullmatch(r"upgrade\.[a-f0-9]{32}", state.get("upgrade_id", "")):
+            raise ValueError()
+    elif "upgrade_id" in state:
+        raise ValueError()
+    return state
+
+def compare_versions(left, right):
+    def parse(value):
+        match = re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?", value)
+        if not match:
+            raise ValueError()
+        pre = match[4].split(".") if match[4] else None
+        if pre and any(part.isdigit() and len(part) > 1 and part[0] == "0" for part in pre):
+            raise ValueError()
+        return tuple(map(int, match.group(1, 2, 3))), pre
+    a, ap = parse(left); b, bp = parse(right)
+    if a != b:
+        return (a > b) - (a < b)
+    if ap is None or bp is None:
+        return (ap is None) - (bp is None)
+    for x, y in zip(ap, bp):
+        if x == y:
+            continue
+        if x.isdigit() and y.isdigit():
+            return (int(x) > int(y)) - (int(x) < int(y))
+        if x.isdigit() != y.isdigit():
+            return -1 if x.isdigit() else 1
+        return (x > y) - (x < y)
+    return (len(ap) > len(bp)) - (len(ap) < len(bp))
+
+def atomic_json(path, value):
+    temporary = path + ".new"
+    if os.path.lexists(temporary):
+        regular(temporary)
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "w") as file:
+        os.fchmod(file.fileno(), 0o600)
+        json.dump(value, file)
+        file.flush(); os.fsync(file.fileno())
+    os.replace(temporary, path)
+    descriptor = os.open(os.path.dirname(path), os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+def copy_owned(source, target):
+    info = regular(source)
+    shutil.copy2(source, target, follow_symlinks=False)
+    os.chown(target, info.st_uid, info.st_gid)
+
+def copy_data(source, target):
+    # 运行时 Unix socket 不含持久数据，其余非普通节点拒绝而不是静默遗漏。
+    info = os.lstat(source)
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError()
+    os.mkdir(target, stat.S_IMODE(info.st_mode))
+    os.chown(target, info.st_uid, info.st_gid)
+    for entry in os.scandir(source):
+        mode = entry.stat(follow_symlinks=False).st_mode
+        if stat.S_ISDIR(mode):
+            copy_data(entry.path, os.path.join(target, entry.name))
+        elif stat.S_ISREG(mode):
+            info = os.lstat(entry.path)
+            shutil.copy2(entry.path, os.path.join(target, entry.name), follow_symlinks=False)
+            os.chown(os.path.join(target, entry.name), info.st_uid, info.st_gid)
+        elif not stat.S_ISSOCK(mode):
+            raise ValueError()
+    shutil.copystat(source, target, follow_symlinks=False)
+
+def upgrade(mode, args):
+    directory, arch, statepath, config, data, unit, command, cli, language, *extra = args
+    check_data_mount(data)
+    def tell(zh, en):
+        print(en if language == "en" else zh, flush=True)
+    def ctl(*arguments, check=True):
+        result = subprocess.run(["systemctl", *arguments], stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        if check and result.returncode:
+            raise OSError("systemctl " + arguments[0])
+        return result
+    def inactive():
+        result = ctl("is-active", "--quiet", "porter.service", check=False)
+        if result.returncode not in (3, 4):
+            raise OSError("service is not inactive")
+    def install_file(source, target, permissions, preserve=False):
+        temporary = os.path.join(directory, "." + os.path.basename(target) + ".new") if target.startswith(directory + "/") else target + ".new"
+        if os.path.lexists(temporary):
+            regular(temporary)
+        subprocess.run(["install", "-m", permissions, source, temporary], check=True, stdin=subprocess.DEVNULL)
+        if preserve:
+            info = regular(source)
+            os.chown(temporary, info.st_uid, info.st_gid)
+            os.chmod(temporary, stat.S_IMODE(info.st_mode))
+        os.replace(temporary, target)
+    with open(statepath) as file:
+        state = validate_state(json.load(file), directory, arch)
+    folder = None
+    transaction = None
+    def load_transaction():
+        nonlocal folder, transaction
+        folder = os.path.join(directory, ".tmp", state["upgrade_id"])
+        trusted_parent(os.path.join(folder, "transaction.json"))
+        regular(os.path.join(folder, "transaction.json"))
+        with open(os.path.join(folder, "transaction.json")) as file:
+            transaction = json.load(file)
+        if not isinstance(transaction, dict) or transaction.get("id") != state["upgrade_id"] or transaction.get("phase") not in ("prepared", "stopped", "backup_complete", "switching", "restoring", "restored") or type(transaction.get("active")) is not bool or type(transaction.get("enabled")) is not bool or type(transaction.get("cli")) is not bool or type(transaction.get("new_link")) is not bool or set(transaction) != {"id", "phase", "active", "enabled", "cli", "new_link"}:
+            raise ValueError()
+        with open(os.path.join(folder, "install.json")) as file:
+            old = validate_state(json.load(file), directory, arch)
+        if old["status"] != "complete" or old["version"] != state["version"] or old["schema"] != state["schema"]:
+            raise ValueError()
+        return old
+    def mark(phase):
+        transaction["phase"] = phase
+        atomic_json(os.path.join(folder, "transaction.json"), transaction)
+    def service_intent():
+        ctl("enable" if transaction["enabled"] else "disable", "porter.service")
+        if transaction["active"]:
+            ctl("start", "porter.service")
+        else:
+            ctl("stop", "porter.service"); inactive()
+    def rollback():
+        old = load_transaction()
+        phase = transaction["phase"]
+        ctl("stop", "porter.service"); inactive()
+        if phase in ("switching", "restoring"):
+            mark("restoring")
+            for name in (("porter", "porterd") if old["schema"] == 2 else ("porter",)):
+                install_file(os.path.join(folder, name), os.path.join(directory, name), "0755", preserve=True)
+            if old["schema"] == 1 and os.path.lexists(os.path.join(directory, "porterd")):
+                regular(os.path.join(directory, "porterd")); os.unlink(os.path.join(directory, "porterd"))
+            install_file(os.path.join(folder, "porter.service"), unit, "0644", preserve=True)
+            install_file(os.path.join(folder, "porter.env"), config, "0600", preserve=True)
+            if transaction["cli"]:
+                install_file(os.path.join(folder, "cli.json"), cli, "0600", preserve=True)
+            elif os.path.lexists(cli):
+                check_cli(cli); os.unlink(cli)
+            if transaction["new_link"] and os.path.lexists(command):
+                if not os.path.islink(command) or os.readlink(command) != directory + "/porter" or os.lstat(command).st_uid != 0:
+                    raise ValueError()
+                os.unlink(command)
+            # 先构造完整恢复目录，旧备份始终保留；目录整体替换，不合并数据库。
+            restored = os.path.join(os.path.dirname(data), ".porter-restore-" + state["upgrade_id"])
+            if os.path.exists(restored):
+                shutil.rmtree(restored)
+            copy_data(os.path.join(folder, "data"), restored)
+            displaced = os.path.join(os.path.dirname(data), ".porter-failed-" + state["upgrade_id"])
+            if os.path.exists(data):
+                if os.path.exists(displaced):
+                    shutil.rmtree(displaced)
+                os.rename(data, displaced)
+            os.rename(restored, data)
+            mark("restored")
+        ctl("daemon-reload")
+        service_intent()
+        install_file(os.path.join(folder, "install.json"), statepath, "0600", preserve=True)
+        tell("已恢复原版本；备份保留于：" + folder, "Original version restored; backup retained at: " + folder)
+    if mode == "recover":
+        try:
+            rollback()
+        except Exception:
+            tell("升级恢复失败，保留安装记录及备份：" + str(folder), "Upgrade recovery failed; installation record and backup retained: " + str(folder))
+            raise
+        return
+    target, staging, health = extra
+    if state["status"] != "complete" or compare_versions(target, state["version"]) < 0:
+        raise ValueError()
+    active_result = ctl("is-active", "--quiet", "porter.service", check=False)
+    if active_result.returncode not in (0, 3, 4):
+        raise ValueError()
+    enabled_result = ctl("is-enabled", "--quiet", "porter.service", check=False)
+    if enabled_result.returncode not in (0, 1, 3, 4):
+        raise ValueError()
+    identifier = "upgrade." + uuid.uuid4().hex
+    folder = os.path.join(directory, ".tmp", identifier)
+    os.mkdir(folder, 0o700)
+    copy_owned(statepath, os.path.join(folder, "install.json"))
+    transaction = {"id": identifier, "phase": "prepared", "active": active_result.returncode == 0, "enabled": enabled_result.returncode == 0, "cli": os.path.exists(cli), "new_link": command != directory + "/porter" and not os.path.lexists(command)}
+    atomic_json(os.path.join(folder, "transaction.json"), transaction)
+    state["status"] = "upgrading"; state["upgrade_id"] = identifier
+    atomic_json(statepath, state)
+    def interrupted(signum, frame):
+        raise InterruptedError()
+    signal.signal(signal.SIGTERM, interrupted); signal.signal(signal.SIGINT, interrupted)
+    try:
+        ctl("stop", "porter.service"); inactive(); mark("stopped")
+        for name in (("porter", "porterd") if state["schema"] == 2 else ("porter",)):
+            copy_owned(os.path.join(directory, name), os.path.join(folder, name))
+        copy_owned(unit, os.path.join(folder, "porter.service"))
+        copy_owned(config, os.path.join(folder, "porter.env"))
+        if transaction["cli"]:
+            copy_owned(cli, os.path.join(folder, "cli.json"))
+        copy_data(data, os.path.join(folder, "data"))
+        mark("backup_complete")
+        # 此标记先于任何替换；恢复时只信完整备份。
+        mark("switching")
+        for name in ("porter", "porterd"):
+            install_file(os.path.join(staging, name), os.path.join(directory, name), "0755")
+        install_file(os.path.join(staging, "porter.service"), unit, "0644")
+        if transaction["new_link"]:
+            os.symlink(directory + "/porter", command)
+        ctl("daemon-reload"); ctl("start", "porter.service")
+        ready = False
+        for attempt in range(30):
+            response = subprocess.run(["curl", "--fail", "--silent", "--show-error", "--noproxy", "*", "--connect-timeout", "2", "--max-time", "2", health + "/healthz"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+            if ctl("is-active", "--quiet", "porter.service", check=False).returncode == 0 and response.returncode == 0 and response.stdout.strip() == "{\"status\":\"ok\"}":
+                ready = True; break
+            subprocess.run(["sleep", "2"], check=True)
+        if not ready or ctl("is-active", "--quiet", "porter.service", check=False).returncode:
+            raise OSError("health check failed")
+        service_intent()
+        new = {"schema": 2, "layout": "split", "directory": directory, "arch": arch, "version": target, "status": "complete"}
+        if command != directory + "/porter":
+            new["command_link"] = command
+        atomic_json(statepath, new)
+        # complete 的原子提交是成功边界；之后只输出，不再执行可能失败的变更。
+    except BaseException:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN); signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            rollback()
+        except Exception:
+            tell("升级恢复失败，请重跑安装器。备份：" + folder, "Upgrade recovery failed. Run the installer again. Backup: " + folder)
+        raise
+    tell("升级完成；回退备份保留于：" + folder, "Upgrade completed; rollback backup retained at: " + folder)
+
 try:
     mode, *args = sys.argv[1:]
     if mode == "trim":
@@ -222,7 +526,7 @@ try:
             raise ValueError()
         print(version)
     elif mode == "unpack":
-        archive, checksums, output = args
+        archive, checksums, output, layout = args
         filename = os.path.basename(archive)
         matches = []
         with open(checksums, encoding="utf-8") as file:
@@ -237,28 +541,110 @@ try:
         if len(matches) != 1 or digest.hexdigest() != matches[0]:
             raise ValueError()
         with tarfile.open(archive, "r:gz") as bundle:
-            members = [member for member in bundle.getmembers() if member.name == "porter"]
-            if len(members) != 1 or not members[0].isreg() or not 0 < members[0].size <= 268435456:
-                raise ValueError()
-            # 只复制精确普通文件，不解包路径、链接或其他成员。
-            with bundle.extractfile(members[0]) as source, open(output, "xb") as destination:
-                while True:
-                    block = source.read(1048576)
-                    if not block:
-                        break
-                    destination.write(block)
+            for name in (("porter", "porterd") if layout == "split" else ("porter",)):
+                members = [member for member in bundle.getmembers() if member.name == name]
+                if len(members) != 1 or not members[0].isreg() or not 0 < members[0].size <= 268435456:
+                    raise ValueError()
+                with bundle.extractfile(members[0]) as source, open(os.path.join(output, name), "xb") as destination:
+                    shutil.copyfileobj(source, destination)
     elif mode == "state-write":
-        json.dump({"schema": 1, "directory": args[0], "arch": args[1], "version": args[2], "status": args[3]}, sys.stdout)
+        state = {"schema": 2 if args[4] == "split" else 1, "directory": args[0], "arch": args[1], "version": args[2], "status": args[3]}
+        if args[4] == "split":
+            state["layout"] = "split"
+            if args[5] == "yes":
+                state["command_link"] = "/usr/bin/porter"
+        json.dump(state, sys.stdout)
     elif mode == "state-read":
-        state = json.load(sys.stdin)
-        if type(state.get("schema")) is not int or state["schema"] != 1 or state["directory"] != args[0] or state["arch"] != args[1] or not re.fullmatch(VERSION, state["version"]) or state["status"] not in ("initializing", "complete", "uninstalling", "uninstalled"):
-            raise ValueError()
-        print(state["version"], state["status"])
+        state = validate_state(json.load(sys.stdin), args[0], args[1])
+        print(state["version"], state["status"], "legacy" if state["schema"] == 1 else "split", "yes" if state.get("command_link") else "no")
     elif mode == "state-directory":
         state = json.load(sys.stdin)
-        if type(state.get("schema")) is not int or state.get("schema") != 1 or not isinstance(state.get("directory"), str) or "\n" in state["directory"]:
+        if type(state.get("schema")) is not int or state.get("schema") not in (1, 2) or not isinstance(state.get("directory"), str) or "\n" in state["directory"]:
             raise ValueError()
         print(state["directory"])
+    elif mode == "link-check":
+        command, target, managed = args
+        trusted_parent(command)
+        if os.path.lexists(command):
+            info = os.lstat(command)
+            if managed != "yes" or not stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or os.readlink(command) != target:
+                raise ValueError()
+    elif mode == "snapshot":
+        result = []
+        for path in args:
+            if os.path.lexists(path):
+                info = regular(path)
+                with open(path, "rb") as file:
+                    result.append((path, info.st_ino, info.st_mode, info.st_uid, hashlib.sha256(file.read()).hexdigest()))
+            else:
+                result.append((path, None))
+        print(json.dumps(result))
+    elif mode in ("cli-check", "cli-purge"):
+        check_cli(args[0])
+        temporary = []
+        folder = os.path.dirname(args[0])
+        if os.path.isdir(folder):
+            for entry in os.scandir(folder):
+                if re.fullmatch(r".cli-[a-f0-9]{24}\.new", entry.name):
+                    info = regular(entry.path)
+                    if stat.S_IMODE(info.st_mode) != 0o600:
+                        raise ValueError()
+                    temporary.append(entry.path)
+        if mode == "cli-purge":
+            for path in temporary + ([args[0]] if os.path.lexists(args[0]) else []):
+                os.unlink(path)
+    elif mode == "data-check":
+        check_data_mount(args[0])
+    elif mode == "semver":
+        if compare_versions(args[0], args[1]) < 0:
+            raise ValueError()
+    elif mode == "unlock":
+        path, pid = args
+        owner = os.path.join(path, "owner.json")
+        regular(owner)
+        with open(owner) as file:
+            data = json.load(file)
+        with open("/proc/" + pid + "/stat") as file:
+            start = file.read().rsplit(")", 1)[1].split()[19]
+        if data != {"pid": int(pid), "start": start}:
+            raise ValueError()
+        os.unlink(owner)
+        os.rmdir(path)
+    elif mode == "lock":
+        path, pid = args
+        try:
+            os.mkdir(path, 0o700)
+        except FileExistsError:
+            info = os.lstat(path)
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o077:
+                raise ValueError()
+            owner = os.path.join(path, "owner.json")
+            regular(owner)
+            descriptor = os.open(owner, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if os.stat(path).st_ino != info.st_ino or os.fstat(descriptor).st_ino != os.lstat(owner).st_ino:
+                    raise ValueError()
+                with os.fdopen(os.dup(descriptor)) as file:
+                    data = json.load(file)
+                if set(data) != {"pid", "start"} or set(os.listdir(path)) != {"owner.json"} or type(data.get("pid")) is not int or data["pid"] <= 0 or not isinstance(data.get("start"), str) or not data["start"].isdigit():
+                    raise ValueError()
+                proc = "/proc/" + str(data["pid"]) + "/stat"
+                if os.path.exists(proc):
+                    with open(proc) as file:
+                        if file.read().rsplit(")", 1)[1].split()[19] == data.get("start"):
+                            raise ValueError()
+                os.unlink(owner)
+                os.rmdir(path)
+                os.mkdir(path, 0o700)
+            finally:
+                os.close(descriptor)
+        with open("/proc/" + pid + "/stat") as file:
+            start = file.read().rsplit(")", 1)[1].split()[19]
+        with open(os.path.join(path, "owner.json"), "x") as file:
+            json.dump({"pid": int(pid), "start": start}, file)
+    elif mode in ("upgrade", "recover"):
+        upgrade(mode, args)
     elif mode == "group-users":
         for line in sys.stdin:
             fields = line.rstrip("\n").split(":")
@@ -277,7 +663,7 @@ try:
         envfile = args[1].replace("\\", "\\\\").replace("\"", "\\\"").replace("%", "%%")
         data = args[2].replace("%", "%%")
         print("[Unit]\nDescription=Porter\nAfter=network.target\n\n[Service]\nType=simple\nUser=porter\nGroup=porter\nEnvironmentFile=" + envfile + "\nExecStart=:\"" + executable + "\"\nWorkingDirectory=" + data + "\nStateDirectory=porter\nStateDirectoryMode=0700\nRestart=on-failure\nRestartSec=3s\nUMask=0077\nAmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\nNoNewPrivileges=true\nProtectSystem=strict\n\n[Install]\nWantedBy=multi-user.target")
-except (ValueError, KeyError, TypeError, OSError, tarfile.TarError):
+except (ValueError, KeyError, TypeError, OSError, tarfile.TarError, subprocess.SubprocessError):
     sys.exit(1)
 '
 py() { python3 -c "$PY_HELPER" "$@"; }
@@ -288,8 +674,8 @@ restore_terminal() {
 cleanup() {
     restore_terminal
     if [[ -n ${STAGING:-} ]]; then root rm -rf -- "$STAGING"; fi
-    if [[ -n ${GLOBAL_LOCK:-} ]]; then root rmdir -- "$GLOBAL_LOCK" || true; fi
-    if [[ -n ${LOCK:-} ]]; then root rmdir -- "$LOCK" || true; fi
+    if [[ -n ${GLOBAL_LOCK:-} ]]; then root python3 -c "$PY_HELPER" unlock "$GLOBAL_LOCK" "$$" || true; fi
+    if [[ -n ${LOCK:-} ]]; then root python3 -c "$PY_HELPER" unlock "$LOCK" "$$" || true; fi
     if [[ ${REMOVE_INSTALL_DIR:-0} == 1 ]]; then
         root rmdir -- "$INSTALL_DIR/.tmp" 2>/dev/null || true
         root rmdir -- "$INSTALL_DIR" 2>/dev/null || true
@@ -352,7 +738,7 @@ fetch() {
         --connect-timeout 10 --max-time 180 "$1" -o "$2"
 }
 write_state() {
-    py state-write "$INSTALL_DIR" "$ARCH" "$VERSION" "$1" | "${PRIV[@]}" tee "$STAGING/install.json" >/dev/null
+    py state-write "$INSTALL_DIR" "$ARCH" "$VERSION" "$1" "$LAYOUT" "$LINK_MANAGED" | "${PRIV[@]}" tee "$STAGING/install.json" >/dev/null
     root install -m 0600 "$STAGING/install.json" "$STATE.new"
     root mv -- "$STATE.new" "$STATE"
 }
@@ -405,11 +791,11 @@ check_inactive() {
 }
 uninstall() {
     local status saved_version fragment dropins expected actual answer path
-    root python3 -c "$PY_HELPER" paths "$INSTALL_DIR" /etc/porter "$CONFIG" "$STATE" "$UNIT" "$DATA" "$DATA/porter.db" "$BINARY" "$STATE.new" "$CONFIG.new" "$UNIT.new" "$INSTALL_DIR/.porter.new" "$INSTALL_DIR/.tmp" || fail '拒绝使用符号链接路径。'
+    root python3 -c "$PY_HELPER" paths "$INSTALL_DIR" /etc/porter "$CONFIG" "$STATE" "$UNIT" "$DATA" "$DATA/porter.db" "$BINARY" "$STATE.new" "$CONFIG.new" "$UNIT.new" "$INSTALL_DIR/.porter.new" "$INSTALL_DIR/.tmp" "$SERVER" "$INSTALL_DIR/.porterd.new" "$CLI_CONFIG" || fail '拒绝使用符号链接路径。'
     if ! root test -e "$STATE"; then
         fragment=$(root systemctl show --property=FragmentPath --value porter.service) || fail '无法查询 systemd 服务。'
         [[ -z $fragment ]] || fail '发现已有 porter.service，拒绝覆盖未知服务。'
-        for path in "$CONFIG" "$UNIT" "$DATA" "$BINARY" "$CONFIG.new" "$STATE.new" "$UNIT.new" "$INSTALL_DIR/.porter.new"; do
+        for path in "$CONFIG" "$UNIT" "$DATA" "$BINARY" "$CONFIG.new" "$STATE.new" "$UNIT.new" "$INSTALL_DIR/.porter.new" "$INSTALL_DIR/.porterd.new"; do
             root test ! -e "$path" || fail '发现未托管的已有文件：%s。' "$path"
         done
         if getent passwd porter >/dev/null || getent group porter >/dev/null; then fail '发现未知的 porter 账号或组，拒绝接管。'; fi
@@ -418,17 +804,20 @@ uninstall() {
         return
     fi
     # 与安装共用锁；失败清理仅释放本次成功获取的锁。
-    root mkdir /etc/porter/.install-lock || fail '另一个安装进程正在写入全局服务配置。'
+    root python3 -c "$PY_HELPER" lock /etc/porter/.install-lock "$$" || fail '另一个安装进程正在写入全局服务配置。'
     GLOBAL_LOCK=/etc/porter/.install-lock
     if root test -d "$INSTALL_DIR"; then
-        root mkdir "$INSTALL_DIR/.install-lock" || fail '安装目录被锁定，请确认没有其他安装进程。'
+        root python3 -c "$PY_HELPER" lock "$INSTALL_DIR/.install-lock" "$$" || fail '安装目录被锁定，请确认没有其他安装进程。'
         LOCK=$INSTALL_DIR/.install-lock
     elif root test -e "$INSTALL_DIR"; then fail '程序目录不是目录。'; fi
     local record
     record=$(root cat "$STATE" | py state-read "$INSTALL_DIR" "$ARCH") || fail '安装状态无效或目录/架构不匹配，未覆盖已有文件。'
-    read -r saved_version status <<<"$record"
+    read -r saved_version status LAYOUT LINK_MANAGED <<<"$record"
+    [[ $LAYOUT != split ]] || BINARY=$SERVER
     VERSION=$saved_version
-    for path in "$CONFIG" "$DATA/porter.db" "$CONFIG.new" "$STATE.new" "$UNIT.new" "$INSTALL_DIR/.porter.new"; do
+    root python3 -c "$PY_HELPER" cli-check "$CLI_CONFIG" || fail 'CLI 配置类型、属主或权限无效。'
+    if [[ $LAYOUT == split ]]; then check_command; fi
+    for path in "$CONFIG" "$DATA/porter.db" "$CONFIG.new" "$STATE.new" "$UNIT.new" "$INSTALL_DIR/.porter.new" "$INSTALL_DIR/.porterd.new"; do
         if root test -e "$path"; then
             root test -f "$path" || fail '托管配置或数据的文件类型不符，拒绝卸载。'
         fi
@@ -436,6 +825,9 @@ uninstall() {
     if root test -e "$DATA"; then
         root test -d "$DATA" || fail '托管配置或数据的文件类型不符，拒绝卸载。'
     fi
+    local dropins
+    dropins=$(root systemctl show --property=DropInPaths --value porter.service) || fail '无法查询 systemd 服务。'
+    [[ -z $dropins ]] || fail '发现自定义 systemd 覆盖配置，拒绝卸载。'
     fragment=$(root systemctl show --property=FragmentPath --value porter.service) || fail '无法查询 systemd 服务。'
     [[ -z $fragment || $fragment == "$UNIT" ]] || fail '发现其他来源的 porter.service，拒绝覆盖。'
     dropins=$(root systemctl show --property=DropInPaths --value porter.service) || fail '无法查询 systemd 服务。'
@@ -452,6 +844,9 @@ uninstall() {
         root test -f "$BINARY" && root test -x "$BINARY" || fail '已有程序不可执行，拒绝覆盖。'
         [[ $(root "$BINARY" --version) == "$VERSION" ]] || fail '程序版本与发布标签不符。'
     elif [[ $status == complete ]]; then fail '托管程序缺失，请先检查安装状态。'; fi
+    if [[ $LAYOUT == split ]] && root test -e "$INSTALL_DIR/porter"; then
+        root test -f "$INSTALL_DIR/porter" && root test -x "$INSTALL_DIR/porter" && [[ $(root "$INSTALL_DIR/porter" --version) == "$VERSION" ]] || fail '程序版本与发布标签不符。'
+    elif [[ $LAYOUT == split && $status == complete ]]; then fail '托管程序缺失，请先检查安装状态。'; fi
     check_uninstall_account
     if [[ $status == uninstalled && $PURGE == 0 ]]; then
         root test ! -e "$BINARY" && root test ! -e "$UNIT" || fail '已卸载状态存在意外程序或服务，请先检查。'
@@ -463,6 +858,7 @@ uninstall() {
     message '将停止并禁用 porter.service，删除程序 %s 和服务文件 %s。\n' "$BINARY" "$UNIT" >&3
     message '同时清理未提交的暂存文件：%s、%s、%s、%s。\n' "$CONFIG.new" "$STATE.new" "$UNIT.new" "$INSTALL_DIR/.porter.new" >&3
     if (( PURGE )); then
+        message '历史升级备份可能包含凭据，仍保留在 %s；失败数据副本可能包含业务数据，仍保留在 %s/.porter-failed-upgrade.<标识> 中。请核对清理。\n' "$INSTALL_DIR/.tmp" "${DATA%/*}" >&3
         message '彻底删除还将清除配置 %s、完整数据目录 %s、安装记录和专用账号/组。\n' "$CONFIG" "$DATA" >&3
     else
         message '保留配置 %s、完整数据目录 %s、安装记录和专用账号/组。\n' "$CONFIG" "$DATA" >&3
@@ -475,18 +871,25 @@ uninstall() {
         IFS= read -r answer <&3 || fail '终端输入已结束。'
         if [[ $answer != DELETE ]]; then message '已取消，未修改安装。\n'; return; fi
     fi
-    STAGING=$GLOBAL_LOCK/work
-    root mkdir "$STAGING"
+    root install -d -m 0755 "$INSTALL_DIR"
+    root install -d -m 0700 "$INSTALL_DIR/.tmp"
+    STAGING=$(root mktemp -d "$INSTALL_DIR/.tmp/uninstall.XXXXXXXX")
     write_state uninstalling
     if root test -f "$UNIT"; then
         root systemctl stop porter.service || fail '停止服务失败，请重试卸载；尚未删除文件。'
         root systemctl disable porter.service || fail '禁用开机启动失败，请重试卸载；尚未删除文件。'
     fi
     check_inactive
+    if [[ $LAYOUT == split ]]; then
+        check_command
+        if [[ $LINK_MANAGED == yes ]]; then root rm -f -- "$COMMAND"; fi
+        root rm -f -- "$INSTALL_DIR/porter" "$INSTALL_DIR/.porterd.new"
+    fi
     root rm -f -- "$UNIT" "$BINARY" "$CONFIG.new" "$STATE.new" "$UNIT.new" "$INSTALL_DIR/.porter.new"
     root systemctl daemon-reload || fail 'systemd 重新加载失败，请重试卸载。'
     if (( PURGE )); then
         root rm -rf -- "$DATA"
+        root python3 -c "$PY_HELPER" cli-purge "$CLI_CONFIG"
         root rm -f -- "$CONFIG"
         if getent passwd porter >/dev/null; then root userdel porter; fi
         if getent group porter >/dev/null; then root groupdel porter; fi
@@ -500,9 +903,128 @@ uninstall() {
     fi
     REMOVE_INSTALL_DIR=1
 }
+check_command() {
+    [[ $INSTALL_DIR/porter != "$COMMAND" ]] || return 0
+    root python3 -c "$PY_HELPER" link-check "$COMMAND" "$INSTALL_DIR/porter" "$LINK_MANAGED" || fail '系统命令入口存在未知文件、链接或不可信目录。'
+}
+ensure_command() {
+    [[ $INSTALL_DIR/porter != "$COMMAND" ]] || return 0
+    check_command
+    if [[ $LINK_MANAGED != yes ]]; then
+        LINK_MANAGED=yes
+        write_state "$status"
+    fi
+    if ! root test -L "$COMMAND"; then
+        root ln -s -- "$INSTALL_DIR/porter" "$COMMAND" || fail '系统命令入口创建失败，未覆盖已有文件。'
+    fi
+}
+show_layout() {
+    if [[ $LAYOUT == split ]]; then
+        message '版本：%s；服务：%s；命令：%s rules（需要 root 或 sudo）。\n' "$VERSION" "$SERVER" "$COMMAND"
+    else
+        message '版本：%s；旧单程序布局不包含独立命令行工具。请使用 --upgrade 显式升级。\n' "$VERSION"
+    fi
+}
+check_managed() {
+    local fragment dropins path expected
+    root python3 -c "$PY_HELPER" data-check "$DATA" || fail '数据目录本身是挂载根或无法校验挂载信息，不能安全执行升级回退。'
+    root python3 -c "$PY_HELPER" cli-check "$CLI_CONFIG" || fail 'CLI 配置类型、属主或权限无效。'
+    fragment=$(root systemctl show --property=FragmentPath --value porter.service) || fail '无法查询 systemd 服务。'
+    [[ -z $fragment || $fragment == "$UNIT" ]] || fail '发现其他来源的 porter.service，拒绝覆盖。'
+    dropins=$(root systemctl show --property=DropInPaths --value porter.service) || fail '无法查询 systemd 服务。'
+    [[ -z $dropins ]] || fail '发现自定义 systemd 覆盖配置，拒绝卸载。'
+    root test -f "$CONFIG" && root test -f "$UNIT" && root test -d "$DATA" && root test -f "$DATA/porter.db" || fail '完整安装的文件、数据目录或数据库缺失，请恢复备份；安装器不会重置配置或数据。'
+    expected=$(py unit "$BINARY" "$CONFIG" "$DATA")
+    [[ $(root cat "$UNIT") == "$expected" ]] || fail '现有 unit 与本安装器不符，拒绝覆盖。'
+    local binaries=("$BINARY")
+    [[ $LAYOUT != split ]] || binaries+=("$INSTALL_DIR/porter")
+    for path in "${binaries[@]}"; do
+        root test -f "$path" && root test -x "$path" || fail '托管程序缺失，请先检查安装状态。'
+        [[ $(root "$path" --version) == "$VERSION" ]] || fail '程序版本与发布标签不符。'
+    done
+    check_uninstall_account
+    HEALTH_URL=$(root cat "$CONFIG" | py env-read "$DATA/porter.db") || fail '现有环境配置无效；未重置任何凭据。'
+    if [[ $LAYOUT == split ]]; then check_command; fi
+}
+lock_upgrade() {
+    root python3 -c "$PY_HELPER" lock "$INSTALL_DIR/.install-lock" "$$" || fail '安装目录被锁定，请确认没有其他安装进程。'
+    LOCK=$INSTALL_DIR/.install-lock
+    root python3 -c "$PY_HELPER" lock /etc/porter/.install-lock "$$" || fail '另一个安装进程正在写入全局服务配置。'
+    GLOBAL_LOCK=/etc/porter/.install-lock
+    local current
+    current=$(root cat "$STATE" | py state-read "$INSTALL_DIR" "$ARCH") || fail '安装状态已变化，请重新运行；未继续修改托管资源。'
+    [[ $current == "$state_record" ]] || fail '安装状态已变化，请重新运行；未继续修改托管资源。'
+}
+recover_upgrade() {
+    lock_upgrade
+    root python3 -c "$PY_HELPER" recover "$INSTALL_DIR" "$ARCH" "$STATE" "$CONFIG" "$DATA" "$UNIT" "$COMMAND" "$CLI_CONFIG" "$LANGUAGE" || fail '升级恢复失败；请检查安装记录及备份后重试。'
+    message '已恢复稳定安装，请重新运行所需安装、升级或卸载命令。\n'
+}
+run_upgrade() {
+    (( managed )) && [[ $status == complete ]] || fail '--upgrade 需要已完成的托管安装。'
+    check_managed
+    # 旧布局不能认领已有的同目标手动链接，也不能覆盖陌生服务程序。
+    if [[ $LAYOUT == legacy ]]; then
+        root test ! -e "$SERVER" && root test ! -L "$SERVER" || fail '发现未托管的已有文件：%s。' "$SERVER"
+        check_command
+    fi
+    root install -d -m 0700 "$INSTALL_DIR/.tmp"
+    STAGING=$(root mktemp -d "$INSTALL_DIR/.tmp/install.XXXXXXXX")
+    local endpoint target archive answer before
+    endpoint=https://api.github.com/repos/lwl0820/porter/releases/latest
+    [[ -z $REQUESTED_VERSION ]] || endpoint=https://api.github.com/repos/lwl0820/porter/releases/tags/$REQUESTED_VERSION
+    fetch "$endpoint" "$STAGING/release.json" || fail '无法获取公开 GitHub Release；请先确认正式版本已成功发布（尚无版本时 API 返回 404）。'
+    target=$(root cat "$STAGING/release.json" | py release "$ARCH" "$REQUESTED_VERSION") || fail 'Release 缺少匹配架构的发行包或 SHA256SUMS。'
+    py semver "$target" "$VERSION" || fail '目标版本无效或低于当前版本，拒绝降级。'
+    if [[ $LAYOUT == split && $target == "$VERSION" ]]; then
+        lock_upgrade
+        check_managed
+        ensure_command
+        show_layout
+        return
+    fi
+    archive=porter-$target-linux-$ARCH.tar.gz
+    fetch "https://github.com/lwl0820/porter/releases/download/$target/$archive" "$STAGING/$archive" || fail '发行包下载失败。'
+    fetch "https://github.com/lwl0820/porter/releases/download/$target/SHA256SUMS" "$STAGING/SHA256SUMS" || fail '校验和下载失败。'
+    root python3 -c "$PY_HELPER" unpack "$STAGING/$archive" "$STAGING/SHA256SUMS" "$STAGING" split || fail '发行包摘要不符或缺少唯一的双程序普通文件。'
+    local name
+    for name in porter porterd; do
+        root chmod 0755 "$STAGING/$name"
+        [[ $(root "$STAGING/$name" --version) == "$target" ]] || fail '程序版本与发布标签不符。'
+    done
+    py unit "$SERVER" "$CONFIG" "$DATA" | "${PRIV[@]}" tee "$STAGING/porter.service" >/dev/null
+    before=$(root python3 -c "$PY_HELPER" snapshot "$STATE" "$CONFIG" "$UNIT" "$BINARY" "$CLI_CONFIG" "$INSTALL_DIR/porter") || fail '安装状态已变化，请重新运行；未继续修改托管资源。'
+    open_terminal || fail '升级需要可交互终端，请在 SSH 终端运行。'
+    message '将从 %s 升级到 %s，期间短暂停服并备份完整配置和数据。\n输入 yes 确认升级，回车取消：' "$VERSION" "$target" >&3
+    IFS= read -r answer <&3 || fail '终端输入已结束。'
+    if [[ $answer != yes ]]; then message '已取消，未修改安装。\n'; return; fi
+    lock_upgrade
+    check_managed
+    [[ $(root python3 -c "$PY_HELPER" snapshot "$STATE" "$CONFIG" "$UNIT" "$BINARY" "$CLI_CONFIG" "$INSTALL_DIR/porter") == "$before" ]] || fail '安装状态已变化，请重新运行；未继续修改托管资源。'
+    if [[ $LAYOUT == legacy ]]; then
+        root test ! -e "$SERVER" && root test ! -L "$SERVER" || fail '发现未托管的已有文件：%s。' "$SERVER"
+        check_command
+    fi
+    "${PRIV[@]}" python3 -c "$PY_HELPER" upgrade "$INSTALL_DIR" "$ARCH" "$STATE" "$CONFIG" "$DATA" "$UNIT" "$COMMAND" "$CLI_CONFIG" "$LANGUAGE" "$target" "$STAGING" "$HEALTH_URL" </dev/null &
+    UPGRADE_PID=$!
+    if wait "$UPGRADE_PID"; then UPGRADE_PID=;
+    else UPGRADE_PID=; fail '升级失败，已尝试恢复原版本；请查看恢复诊断。'; fi
+    VERSION=$target; LAYOUT=split; BINARY=$SERVER
+    show_layout
+}
+
+handle_signal() {
+    local code=$1
+    trap '' INT TERM
+    if [[ -n ${UPGRADE_PID:-} ]]; then
+        kill -TERM "$UPGRADE_PID" 2>/dev/null || true
+        wait "$UPGRADE_PID" 2>/dev/null || true
+    fi
+    exit "$code"
+}
 main() {
-    trap cleanup EXIT; trap 'fail "命令执行失败，请检查上方诊断后重试。"' ERR; trap 'exit 130' INT; trap 'exit 143' TERM
-    INSTALL_DIR=/opt/porter; REQUESTED_VERSION=; UNINSTALL=0; PURGE=0; DIRECTORY_EXPLICIT=0
+    trap cleanup EXIT; trap 'fail "命令执行失败，请检查上方诊断后重试。"' ERR; trap 'handle_signal 130' INT; trap 'handle_signal 143' TERM
+    INSTALL_DIR=/opt/porter; REQUESTED_VERSION=; UNINSTALL=0; PURGE=0; UPGRADE=0; DIRECTORY_EXPLICIT=0; LAYOUT=split; LINK_MANAGED=no
     LANGUAGE_EXPLICIT=0
     local managed=0 status=initializing saved_version fragment ready=0 attempt response arg
     local arguments=("$@")
@@ -511,7 +1033,7 @@ main() {
         if [[ ${arguments[arg]} == --lang ]]; then
             (( arg + 1 < ${#arguments[@]} )) || fail '%s 缺少值。' --lang
             LANGUAGE=${arguments[arg+1]}; LANGUAGE_EXPLICIT=1
-            [[ $LANGUAGE == zh-CN || $LANGUAGE == en ]] || { LANGUAGE=zh-CN; fail '语言必须是 zh-CN 或 en。'; }
+            [[ $LANGUAGE == zh-CN || $LANGUAGE == en ]] || { LANGUAGE=en; fail '语言必须是 zh-CN 或 en。'; }
         fi
     done
     local show_help=0
@@ -527,11 +1049,13 @@ main() {
                 shift 2 ;;
             --uninstall) UNINSTALL=1; shift ;;
             --purge) PURGE=1; shift ;;
+            --upgrade) UPGRADE=1; shift ;;
             *) fail '未知参数：%s。' "$1" ;;
         esac
     done
     if (( show_help )); then help; return; fi
     (( ! PURGE || UNINSTALL )) || fail '--purge 仅可与 --uninstall 一起使用。'
+    (( ! UNINSTALL || ! UPGRADE )) || fail '卸载不能指定 --upgrade。'
     [[ $UNINSTALL == 0 || -z $REQUESTED_VERSION ]] || fail '卸载不能指定 --version。'
     select_language
     validate_directory
@@ -544,7 +1068,7 @@ main() {
     fi
     CONFIG=/etc/porter/porter.env; STATE=/etc/porter/install.json
     UNIT=/etc/systemd/system/porter.service; DATA=/var/lib/porter
-    if (( UNINSTALL )); then
+    if (( UNINSTALL || UPGRADE )); then
         command -v python3 >/dev/null 2>&1 || fail '卸载需要 Python 3，请先安装后重试。'
         root python3 -c "$PY_HELPER" paths /etc/porter "$STATE" || fail '拒绝使用符号链接路径。'
         if root test -f "$STATE" && (( ! DIRECTORY_EXPLICIT )); then
@@ -556,12 +1080,20 @@ main() {
     INSTALL_DIR=$(root realpath -m -- "$INSTALL_DIR")
     [[ $INSTALL_DIR != / ]] || fail '不能安装到根目录。'
     CONFIG=/etc/porter/porter.env; STATE=/etc/porter/install.json
-    UNIT=/etc/systemd/system/porter.service; DATA=/var/lib/porter; BINARY=$INSTALL_DIR/porter
+    UNIT=/etc/systemd/system/porter.service; DATA=/var/lib/porter; BINARY=$INSTALL_DIR/porter; SERVER=$INSTALL_DIR/porterd; COMMAND=/usr/bin/porter; CLI_CONFIG=/etc/porter/cli.json
     [[ $INSTALL_DIR != "$DATA" && $INSTALL_DIR != "$DATA/"* && $INSTALL_DIR != /etc/porter && $INSTALL_DIR != /etc/porter/* ]] || fail '程序目录不能放在 Porter 数据或配置目录内。'
     for path in /etc/porter "$CONFIG" "$STATE" "$UNIT" "$DATA" "$DATA/porter.db" "$BINARY"; do
         root test ! -L "$path" || fail '拒绝使用符号链接路径：%s。' "$path"
     done
-    if (( UNINSTALL )); then uninstall; return; fi
+    if (( UNINSTALL )); then
+        if root test -f "$STATE"; then
+            local state_record
+            state_record=$(root cat "$STATE" | py state-read "$INSTALL_DIR" "$ARCH") || fail '安装状态无效或目录/架构不匹配，未覆盖已有文件。'
+            read -r VERSION status LAYOUT LINK_MANAGED <<<"$state_record"
+            if [[ $status == upgrading ]]; then recover_upgrade; return; fi
+        fi
+        uninstall; return
+    fi
     if ! root test -e "$CONFIG" && ! root test -e "$STATE"; then
         open_terminal || fail '首次配置需要可交互终端，请在 SSH 终端运行。'
     fi
@@ -575,28 +1107,35 @@ main() {
             root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-remove --no-install-recommends "${packages[@]}"
         else root dnf install -y --setopt=obsoletes=False "${packages[@]}"; fi
     fi
-    root python3 -c "$PY_HELPER" paths "$INSTALL_DIR" /etc/porter "$CONFIG" "$STATE" "$UNIT" "$DATA" "$DATA/porter.db" "$BINARY" "$STATE.new" "$CONFIG.new" "$UNIT.new" "$INSTALL_DIR/.porter.new" "$INSTALL_DIR/.tmp" || fail '拒绝使用符号链接路径。'
+    root python3 -c "$PY_HELPER" paths "$INSTALL_DIR" /etc/porter "$CONFIG" "$STATE" "$UNIT" "$DATA" "$DATA/porter.db" "$BINARY" "$STATE.new" "$CONFIG.new" "$UNIT.new" "$INSTALL_DIR/.porter.new" "$INSTALL_DIR/.tmp" "$SERVER" "$INSTALL_DIR/.porterd.new" "$CLI_CONFIG" || fail '拒绝使用符号链接路径。'
     if root test -e "$STATE"; then
         local state_record
         state_record=$(root cat "$STATE" | py state-read "$INSTALL_DIR" "$ARCH") || fail '安装状态无效或目录/架构不匹配，未覆盖已有文件。'
-        read -r saved_version status <<<"$state_record"
+        read -r saved_version status LAYOUT LINK_MANAGED <<<"$state_record"
+        [[ $LAYOUT != split ]] || BINARY=$SERVER
         VERSION=$saved_version; managed=1
-        [[ -z $REQUESTED_VERSION || $REQUESTED_VERSION == "$VERSION" ]] || fail '已有安装不能通过 --version 升级，请按 README 显式升级。'
+        [[ $UPGRADE == 1 || -z $REQUESTED_VERSION || $REQUESTED_VERSION == "$VERSION" ]] || fail '已有安装不能通过 --version 升级，请按 README 显式升级。'
     else
         fragment=$(root systemctl show --property=FragmentPath --value porter.service) || fail '无法查询 systemd 服务。'
         [[ -z $fragment ]] || fail '发现已有 porter.service，拒绝覆盖未知服务。'
-        for path in "$CONFIG" "$UNIT" "$DATA" "$BINARY"; do
+        for path in "$CONFIG" "$UNIT" "$DATA" "$BINARY" "$SERVER"; do
             root test ! -e "$path" || fail '发现未托管的已有文件：%s。' "$path"
         done
         if getent passwd porter >/dev/null || getent group porter >/dev/null; then fail '发现未知的 porter 账号或组，拒绝接管。'; fi
     fi
+    if [[ $status == upgrading ]]; then recover_upgrade; return; fi
+    if (( UPGRADE )); then run_upgrade; return; fi
     [[ $status != uninstalling ]] || fail '卸载尚未完成，请先重新运行 --uninstall。'
     if [[ $status == complete ]]; then
+        if [[ $LAYOUT == split ]]; then
+            root test -f "$INSTALL_DIR/porter" && root test -x "$INSTALL_DIR/porter" || fail '完整安装的文件、数据目录或数据库缺失，请恢复备份；安装器不会重置配置或数据。'
+        fi
         root test -x "$BINARY" && root test -f "$CONFIG" && root test -f "$UNIT" &&
             root test -d "$DATA" && root test -f "$DATA/porter.db" ||
             fail '完整安装的文件、数据目录或数据库缺失，请恢复备份；安装器不会重置配置或数据。'
     fi
     if [[ $status == uninstalled ]]; then
+        if [[ $LAYOUT == split ]]; then root test ! -e "$INSTALL_DIR/porter" || fail '已卸载状态存在意外程序或服务，请先检查。'; fi
         root test -f "$CONFIG" && root test -d "$DATA" && root test -f "$DATA/porter.db" || fail '保留的配置或数据库缺失，请恢复备份。'
         root test ! -e "$BINARY" && root test ! -e "$UNIT" || fail '已卸载状态存在意外程序或服务，请先检查。'
     fi
@@ -604,8 +1143,12 @@ main() {
         HEALTH_URL=$(root cat "$CONFIG" | py env-read "$DATA/porter.db") || fail '现有环境配置无效；未重置任何凭据。'
         if [[ ${TTY_OPEN:-0} == 1 ]]; then exec 3>&-; TTY_OPEN=0; fi
     else collect_input; fi
+    if [[ $LAYOUT == split ]]; then
+        BINARY=$SERVER
+        check_command
+    fi
     root install -d -m 0755 "$INSTALL_DIR"
-    root mkdir "$INSTALL_DIR/.install-lock" || fail '安装目录被锁定，请确认没有其他安装进程。'
+    root python3 -c "$PY_HELPER" lock "$INSTALL_DIR/.install-lock" "$$" || fail '安装目录被锁定，请确认没有其他安装进程。'
     LOCK=$INSTALL_DIR/.install-lock
     root install -d -m 0700 "$INSTALL_DIR/.tmp"
     STAGING=$(root mktemp -d "$INSTALL_DIR/.tmp/install.XXXXXXXX")
@@ -625,12 +1168,14 @@ main() {
         archive=porter-$VERSION-linux-$ARCH.tar.gz
         fetch "https://github.com/lwl0820/porter/releases/download/$VERSION/$archive" "$STAGING/$archive" || fail '发行包下载失败。'
         fetch "https://github.com/lwl0820/porter/releases/download/$VERSION/SHA256SUMS" "$STAGING/SHA256SUMS" || fail '校验和下载失败。'
-        root python3 -c "$PY_HELPER" unpack "$STAGING/$archive" "$STAGING/SHA256SUMS" "$STAGING/porter" || fail '发行包摘要不符或不含唯一的 porter 普通文件。'
-        root chmod 0755 "$STAGING/porter"
-        [[ $(root "$STAGING/porter" --version) == "$VERSION" ]] || fail '程序版本与发布标签不符。'
+        root python3 -c "$PY_HELPER" unpack "$STAGING/$archive" "$STAGING/SHA256SUMS" "$STAGING" "$LAYOUT" || fail '发行包摘要不符或不含唯一的 porter 普通文件。'
+        for name in porter $([[ $LAYOUT != split ]] || printf porterd); do
+            root chmod 0755 "$STAGING/$name"
+            [[ $(root "$STAGING/$name" --version) == "$VERSION" ]] || fail '程序版本与发布标签不符。'
+        done
     else root test -x "$BINARY" || fail '已有程序不可执行，拒绝覆盖。'; fi
     root install -d -m 0755 /etc/porter
-    root mkdir /etc/porter/.install-lock || fail '另一个安装进程正在写入全局服务配置。'
+    root python3 -c "$PY_HELPER" lock /etc/porter/.install-lock "$$" || fail '另一个安装进程正在写入全局服务配置。'
     GLOBAL_LOCK=/etc/porter/.install-lock
     if (( managed )); then
         # 前置校验到取得两把锁之间可能已完成卸载，不能继续使用旧记录。
@@ -638,12 +1183,15 @@ main() {
         current_record=$(root cat "$STATE" | py state-read "$INSTALL_DIR" "$ARCH") || fail '安装状态已变化，请重新运行；未继续修改托管资源。'
         [[ $current_record == "$state_record" ]] || fail '安装状态已变化，请重新运行；未继续修改托管资源。'
     fi
+    root python3 -c "$PY_HELPER" cli-check "$CLI_CONFIG" || fail 'CLI 配置类型、属主或权限无效。'
+    if [[ $LAYOUT == split ]]; then check_command; fi
     if (( ! managed )); then
         root test ! -e "$STATE" || fail '安装期间出现已有安装状态，请重新运行。'
-        for path in "$CONFIG" "$UNIT" "$DATA" "$BINARY"; do
+        for path in "$CONFIG" "$UNIT" "$DATA" "$BINARY" "$SERVER"; do
             root test ! -e "$path" || fail '安装期间出现已有文件：%s。' "$path"
         done
         if getent passwd porter >/dev/null || getent group porter >/dev/null; then fail '安装期间出现同名账号或组，拒绝接管。'; fi
+        [[ $LAYOUT != split || $INSTALL_DIR/porter == "$COMMAND" ]] || LINK_MANAGED=yes
         write_state initializing
     fi
     if [[ $status == uninstalled ]]; then write_state initializing; fi
@@ -653,13 +1201,21 @@ main() {
         root mv -- "$CONFIG.new" "$CONFIG"
         unset USERNAME PASSWORD LISTEN
     fi
+    for name in porter $([[ $LAYOUT != split ]] || printf porterd); do
+        if root test -e "$INSTALL_DIR/$name"; then
+            [[ $(root "$INSTALL_DIR/$name" --version) == "$VERSION" ]] || fail '程序版本与发布标签不符。'
+        fi
+    done
     root chmod 0600 "$CONFIG" "$STATE"
     check_account
     root install -d -o porter -g porter -m 0700 "$DATA"
-    if ! root test -e "$BINARY"; then
-        root install -m 0755 "$STAGING/porter" "$INSTALL_DIR/.porter.new"
-        root mv -- "$INSTALL_DIR/.porter.new" "$BINARY"
-    fi
+    for name in porter $([[ $LAYOUT != split ]] || printf porterd); do
+        if ! root test -e "$INSTALL_DIR/$name"; then
+            root install -m 0755 "$STAGING/$name" "$INSTALL_DIR/.$name.new"
+            root mv -- "$INSTALL_DIR/.$name.new" "$INSTALL_DIR/$name"
+        fi
+    done
+    if [[ $LAYOUT == split ]]; then ensure_command; fi
     if ! root test -e "$UNIT"; then
         root install -m 0644 "$STAGING/porter.service" "$UNIT.new"
         root mv -- "$UNIT.new" "$UNIT"
@@ -675,6 +1231,7 @@ main() {
     done
     (( ready )) || fail '服务未就绪，请检查 journalctl -u porter.service 和监听设置。'
     write_state complete
+    show_layout
     message '\nPorter 已就绪\n用户入口：%s/user/\n管理员入口：%s/admin/\n通配监听时，远程访问请改用服务器 IP。\n' "$HEALTH_URL" "$HEALTH_URL"
     message '配置：%s（权限 600）；数据：%s；程序：%s\n' "$CONFIG" "$DATA" "$BINARY"
     local prefix=

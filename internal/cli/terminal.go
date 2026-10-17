@@ -41,7 +41,7 @@ func (t *terminal) read(prompt string) (string, error) {
 		return "", io.EOF
 	case got := <-ready:
 		// 输入结束时丢弃尚未确认的半行内容，不能把它当作一次提交。
-		if got.err != nil {
+		if got.err != nil || t.ctx.Err() != nil {
 			return "", io.EOF
 		}
 		return strings.TrimSpace(got.line), nil
@@ -49,15 +49,15 @@ func (t *terminal) read(prompt string) (string, error) {
 }
 func (t *terminal) language() (string, error) {
 	for {
-		value, err := t.read("语言 / Language\n1 中文\n2 English\n> ")
+		value, err := t.read("Language / 语言\n1 English (default / 默认)\n2 中文\n> ")
 		if err != nil {
 			return "", err
 		}
 		switch value {
-		case "1":
-			return "zh-CN", nil
-		case "2":
+		case "", "1", "en":
 			return "en", nil
+		case "2", "zh-CN":
+			return "zh-CN", nil
 		case "q", "cancel":
 			return "", io.EOF
 		}

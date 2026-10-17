@@ -25,9 +25,9 @@ Run on a Linux server using systemd, such as an SSH terminal:
 curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install.sh | bash
 ```
 
-Supports Ubuntu 22.04/24.04, Debian 12/13, RHEL/Rocky Linux/AlmaLinux 9/10 on amd64 and arm64. Requires Bash, curl for the download command, and root or sudo privileges. The installer adds Python 3, curl and CA certificates from the system repositories when needed and downloads a standalone GitHub Release binary. Docker, Go and Node.js are unnecessary. systemd must be PID 1; ordinary distribution containers are unsupported.
+Supports Ubuntu 22.04/24.04, Debian 12/13, RHEL/Rocky Linux/AlmaLinux 9/10 on amd64 and arm64. Requires Bash, curl for the download command, and root or sudo privileges. The installer adds Python 3, curl and CA certificates from the system repositories when needed and downloads the GitHub Release programs. Docker, Go and Node.js are unnecessary. systemd must be PID 1; ordinary distribution containers are unsupported.
 
-The script first offers **中文 / English**, defaulting to Chinese when you press Enter. Specify `bash -s -- --lang en` or `bash -s -- --lang zh-CN` after the pipe to choose directly. Help is available without a terminal through `bash install.sh --help --lang en`. Installer help, prompts, errors and results follow the chosen language; system command diagnostics retain their original language.
+The script first offers **1 English / 2 中文**, defaulting to English when you press Enter. Specify `bash -s -- --lang en` or `bash -s -- --lang zh-CN` after the pipe to choose directly. Help is available without a terminal through `bash install.sh --help --lang en`, with English as the default. Installer help, prompts, errors and results follow the chosen language; system command diagnostics retain their original language. This selection does not set the CLI's saved language.
 
 First installation asks for an **admin username, hidden password, password confirmation and Web listen address**. Passwords are neither generated nor echoed. Use a complete `IPv4:port` or `[IPv6]:port`, such as `127.0.0.1:18080`, `0.0.0.0:8080` or `[::]:8080`, with a port from 1 to 65535. For remote access to a wildcard address, replace the displayed loopback IP with the server IP. Restrict the Web port to trusted networks; the installer does not configure a firewall or HTTPS.
 
@@ -44,15 +44,18 @@ Default files and service; `--install-dir` changes only the program directory:
 
 | Resource | Location |
 | --- | --- |
-| Program | `/opt/porter/porter` |
+| Service program | `/opt/porter/porterd` |
+| Command-line client | `/opt/porter/porter` |
+| System command | `/usr/bin/porter`, a managed link to the client |
 | Admin and listen configuration | `/etc/porter/porter.env`, mode `600` |
+| CLI language preference | `/etc/porter/cli.json`, mode `600`, created on first language selection |
 | Installation record | `/etc/porter/install.json`, mode `600` |
 | SQLite and journal files | `/var/lib/porter`, writable by the service user |
 | systemd unit | `/etc/systemd/system/porter.service` |
 
 The dedicated non-login `porter` user/group runs the service with only `CAP_NET_BIND_SERVICE`, supporting low ports, restart on failure and startup at boot. Configuration uses systemd `EnvironmentFile` syntax: double-quoted values with backslashes before literal backslashes, double quotes, dollar signs and backticks. For example, write a literal `$` as `\$` and a literal `\` as `\\`. Do not source this file or use Compose-style `$$`. Additional `PORTER_*` settings, such as `PORTER_COOKIE_SECURE="true"`, may be appended with the same quoting. Restart with `sudo systemctl restart porter.service` after editing.
 
-Repeating installation in the same directory preserves credentials, listen address, program and database without upgrading. Partial installation failures can be retried using saved credentials. An existing installation rejects a different `--version`. Unknown existing users, services, configuration or data are never taken over; Docker data is not migrated. Success requires an active, enabled service and an exact healthy `/healthz` response at the configured address.
+Repeating installation in the same directory preserves credentials, listen address, programs and database without upgrading. Partial installation failures can be retried using saved credentials. Changing versions requires `--upgrade`; a different `--version` alone is rejected. A missing managed system link is repaired, while unknown files or links at `/usr/bin/porter` are never overwritten or adopted. When `--install-dir /usr/bin` is used, the installed client itself provides the system command. Unknown existing users, services, configuration or data are never taken over; Docker data is not migrated. Success requires an active, enabled service and an exact healthy `/healthz` response at the configured address.
 
 The installer prints both user `/user/` and administrator `/admin/` URLs. The root URL opens the ordinary user portal. Administrators create ordinary user accounts in the admin portal.
 
@@ -63,7 +66,7 @@ curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install
   bash -s -- --uninstall --lang en
 ```
 
-Review the resource list and type `yes` to confirm, or Enter to cancel. By default uninstall stops and disables the service and removes the managed binary and unit. It retains the **entire** `/var/lib/porter` directory, `/etc/porter/porter.env`, the restricted installation record and the dedicated service account/group. Reinstall with the current script and the original program directory to reuse credentials, listen address and databases. It downloads the **same recorded version**, which must still be available as a Release; a failed download preserves configuration and data. Older scripts do not recognize the uninstalled state and must not be used for recovery. After an interrupted uninstall, retry the same uninstall options before reinstalling.
+Review the resource list and type `yes` to confirm, or Enter to cancel. By default uninstall stops and disables the service and removes its managed programs, unit and system link. It retains the **entire** `/var/lib/porter` directory, `/etc/porter/porter.env`, `/etc/porter/cli.json`, the restricted installation record and the dedicated service account/group. Reinstall with the current script and the original program directory to reuse credentials, listen address, databases and CLI language. It restores the **same recorded version and layout**, which must still be available as a Release; a failed download preserves configuration and data. Older scripts do not recognize the split layout and must not be used for recovery. After an interrupted uninstall, retry the same uninstall options before reinstalling.
 
 To permanently remove accounts, rules and statistics, add `--purge`. After `yes`, a second confirmation requires typing `DELETE`:
 
@@ -72,7 +75,7 @@ curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install
   bash -s -- --uninstall --purge --lang en
 ```
 
-Purge removes managed configuration, the entire data directory, installation record and dedicated user/group. Both uninstall modes remove the installer's uncommitted `porter.env.new`, `install.json.new`, `porter.service.new` and `.porter.new` files after validating their paths and file types. Other extra files in the program and configuration directories are preserved. Cancellation or absence of an interactive terminal does not start uninstall. Unknown services, modified units, systemd drop-ins, symbolic links and mismatched accounts are rejected. Shared logs, system packages and Docker resources are retained. `--purge` requires `--uninstall`; uninstall rejects `--version`.
+Purge removes the service configuration `porter.env`, CLI configuration `cli.json`, entire data directory, installation record and dedicated user/group. Both uninstall modes clean validated, uncommitted installer files. Other extra files in the program and configuration directories are preserved. Cancellation or absence of an interactive terminal does not start uninstall. Unknown services, modified units, systemd drop-ins, replaced configuration nodes and mismatched accounts are rejected before stopping the service. Only the verified managed system link is removed. Shared logs, system packages and Docker resources are retained. `--purge` requires `--uninstall`; uninstall rejects `--version` and `--upgrade`.
 
 A forced interruption may leave historical `.tmp` contents in the program directory, potentially including temporary configuration or credential copies. Both uninstall modes preserve these files because their ownership cannot be confirmed. Inspect them before removing them manually; purge does not remove unknown historical copies.
 
@@ -85,54 +88,56 @@ sudo systemctl stop porter.service
 sudo systemctl start porter.service
 ```
 
-Before a native upgrade, stop the service and back up the complete data directory, configuration, unit and binary. Do not copy just a live database file. For the default locations:
+To upgrade a managed installation or migrate an older single-program installation, use the current installer with **`--upgrade`**. Omitting `--version` selects the latest stable Release; specify it to choose a published split-program release:
 
 ```bash
-sudo systemctl stop porter.service
-install -d -m 0700 "$PWD/backups"
-sudo tar -czf "$PWD/backups/porter-before-upgrade.tar.gz" -C / \
-  etc/porter var/lib/porter etc/systemd/system/porter.service
-sudo chmod 0600 "$PWD/backups/porter-before-upgrade.tar.gz"
-sudo cp /opt/porter/porter "$PWD/backups/porter.previous"
+curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install.sh | \
+  bash -s -- --upgrade --lang en
+# To pin the target, add: --version vX.Y.Z
 ```
 
-Download the target architecture archive and `SHA256SUMS` from the target Release into a separate `.tmp/porter-upgrade` directory. Verify the archive with `sha256sum --ignore-missing -c SHA256SUMS`, then extract its `porter` binary. Rerunning the installer does not upgrade. Replace the source path below with the verified binary, and adjust the destination for a custom installation:
+The installer verifies the current managed installation, target checksum and both program versions before stopping anything. It displays the source and target versions and asks for confirmation. Upgrading briefly interrupts forwarding. After stopping the service it backs up the previous programs, unit, exact installation record, configuration and **complete data directory**, then switches the programs and unit together. Both programs must come from the same release. Downgrades, single-program target archives, customized units and conflicting target files are rejected. A complete split installation at the same version is an idempotent check.
 
-```bash
-sudo install -m 0755 .tmp/porter-upgrade/porter /opt/porter/porter.new
-sudo mv /opt/porter/porter.new /opt/porter/porter
-sudo systemctl start porter.service
-sudo journalctl -u porter.service -n 30 --no-pager
-```
+The data directory itself (`/var/lib/porter`) must not be a mount point, including a bind mount: the installer rejects such an upgrade before stopping the service or changing the installation, so whole-directory rollback remains possible. Its parent directory, such as `/var`, may be on a separate filesystem.
 
-Verify login, health and real TCP/UDP traffic. After a manual upgrade, update only the `version` field in `/etc/porter/install.json` to the actual release tag, keeping the remaining fields and mode `600`. For rollback, stop the service and restore the previous binary with its matching **complete data and configuration backup**; an older binary cannot use an upgraded database. Native backups are separate from the Docker volume backups below.
+On failure the installer restores the matching old programs, configuration and complete data, together with the prior service state. After a forced interruption, rerun the current installer command. That run first restores a stable installation and exits; run the desired upgrade or uninstall command again after recovery succeeds.
+
+Backups are kept under the program directory at `.tmp/upgrade.<id>` (by default `/opt/porter/.tmp/upgrade.<id>`); the installer prints the exact location. They contain the old programs, unit, installation record, service/CLI configuration and complete data, and may include credentials. Keep them protected: purge preserves historical upgrade backups. A rollback also retains the failed new data under the data directory’s parent at `.porter-failed-upgrade.<id>` (by default `/var/lib/.porter-failed-upgrade.<id>`). These copies may contain business data; inspect them before any manual cleanup. If recovery fails, preserve the installation record, backup and any recovery directories reported in the error; do not overwrite them with another installation or restore a database file in isolation.
+
+Ordinary reruns of a legacy installation preserve its original version and service layout, without claiming that a separate CLI has been installed. **v0.2.0 has no rule CLI**: running its `porter rules` may report missing `PORTER_ADMIN_USERNAME` and `PORTER_ADMIN_PASSWORD`. Check `/opt/porter/porter --version` and upgrade after the split-program Release is available; exporting Web credentials is not the fix.
+
+For a manual installation or custom unit, stop the service and save the complete data directory, configuration, unit and old programs first. Verify the downloaded archive using `SHA256SUMS`, install both `porter` and `porterd`, and change the unit's `ExecStart` from the old `porter` to `porterd` before starting it. The managed installer refuses to take over customized units. Do not manually edit its installation record to bypass this check. Verify login, health and real TCP/UDP traffic. Rollback must restore the older programs with their matching **complete configuration and data backup**, not just replace one binary. Native backups are separate from Docker volume backups below.
 
 ### Native rule commands
 
-Use the installed binary as root or through `sudo` to manage rules with administrator privileges, without entering Web credentials. The Porter service must be running; commands connect to its local Unix socket and changes appear immediately in the Web panel. After upgrading the binary, restart the service to enable the control socket. These commands support native Linux only: Docker images disable both rule commands and the control socket at build time, and native binaries also reject rule management in detected container environments. Use the Web panel for Docker deployments.
+`porterd` runs the service; `porter` is a separate command-line client. The installer exposes `porter` on the system PATH, including for the default and custom installation directories. Use it as root or through `sudo` to manage rules with administrator privileges, without entering Web credentials. The service must be running for rule operations; commands use its local Unix socket and changes appear immediately in the Web panel. These commands support native Linux only: Docker images contain only `/porterd`, with local control disabled at build time. Native clients also reject rule management in detected container environments. Use the Web panel for Docker deployments; commands hard-coding the previous Docker `/porter` path must switch to `/porterd` for service operations.
 
 Open the interactive menu:
 
 ```bash
-sudo /opt/porter/porter rules
-sudo /opt/porter/porter rules --lang en
+sudo porter
+# The existing entry is also supported:
+sudo porter rules
+sudo porter rules --lang en
 ```
 
-Without `--lang`, **the first step is choosing 中文 or English**. Empty or invalid choices ask again; no language is selected automatically or saved between calls. Explicit `--lang zh-CN` or `--lang en` skips language selection. The menu offers create, list, details, edit, delete and exit. Select rules from the displayed list; editing can retain current values, and deletion asks for confirmation with cancellation as the default. Canceling an unfinished operation does not submit it; completed operations remain saved. Language selection and menu input use the controlling terminal (`/dev/tty`), keeping standard output and redirected standard input separate. The menu requires a terminal even with `--lang` and does not accept `--json`.
+On first use without `--lang`, **choose 1 English or 2 中文; Enter selects English**. The selection is saved in `/etc/porter/cli.json` and reused on later calls, for both root and sudo. `--lang en` or `--lang zh-CN` overrides the language for that call only; it does not change the saved preference. Use the menu's language-switching option to save a different language. The preference is independent of the service, Web credentials and database. A save failure is reported and the selected language is used for that call; an invalid configuration is diagnosed rather than silently overwritten. Ordinary uninstall preserves this file, while purge deletes it.
 
-For direct commands or unattended scripts, provide an action, all required arguments, and `--lang`:
+The menu offers create, list, details, edit, delete, language switching and exit. Select rules from the displayed list; editing can retain current values, and deletion asks for confirmation with cancellation as the default. Canceling an unfinished operation does not submit it; completed operations remain saved. Language selection and menu input use the controlling terminal (`/dev/tty`), keeping standard output and redirected standard input separate. The menu requires a terminal even with `--lang` and does not accept `--json`.
+
+For direct commands or unattended scripts, provide an action and all required arguments. Explicit `--lang` also works before the first language has been saved:
 
 ```bash
-sudo /opt/porter/porter rules add --lang en \
+sudo porter rules add --lang en \
   --name website --protocol tcp --listen-host 0.0.0.0 --listen-port 18081 \
   --target-host example.com --target-port 80 --enabled=true --traffic-enabled=false
-sudo /opt/porter/porter rules list --lang en
-sudo /opt/porter/porter rules get RULE_ID --lang en --json
-sudo /opt/porter/porter rules update RULE_ID --lang en --enabled=false
-sudo /opt/porter/porter rules delete RULE_ID --lang en
+sudo porter rules list --lang en
+sudo porter rules get RULE_ID --lang en --json
+sudo porter rules update RULE_ID --lang en --enabled=false
+sudo porter rules delete RULE_ID --lang en
 ```
 
-Replace `RULE_ID` with the stable ID returned by create or list. Protocol values are `tcp`, `udp` and `tcp+udp`. Parameter commands never enter a wizard for missing fields. Without a controlling terminal, omitting `--lang` fails before any rule operation. **Parameter-mode `delete` takes effect immediately, without confirmation.**
+Replace `RULE_ID` with the stable ID returned by create or list. Protocol values are `tcp`, `udp` and `tcp+udp`. Parameter commands never enter a wizard for missing fields. Without a controlling terminal and without a saved preference, omitting `--lang` fails before any rule operation. **Parameter-mode `delete` takes effect immediately, without confirmation.**
 
 | Command | Arguments and behavior |
 | --- | --- |
@@ -146,15 +151,15 @@ Common options `--lang zh-CN|en`, `--socket PATH`, `--json` and `--help` can app
 
 Administrators can manage all rules. Creation with `--owner-id USER_ID` assigns an existing user; that user's allocated ports and quota still apply. Use the existing user ID from the authenticated Web admin API (`GET /api/admin/users`, `user.id` in each account). Rule updates preserve ownership. The CLI manages rules only; user, plan, port-pool, retry and counter-reset administration remains in the Web panel. Updates and deletions check revisions and fail on concurrent changes; reload before retrying. Scripts can pin a previously observed revision with `--revision N`. After a timeout, inspect the result before resubmitting a change.
 
-The installed service uses `/var/lib/porter/porter-control.sock` by default. The socket accepts only actual root peers and is not exposed on the Web port. Service startup creates it beside the database, unless `PORTER_CONTROL_SOCKET` sets another path. The CLI chooses `--socket`, then `PORTER_CONTROL_SOCKET`, then `/var/lib/porter/porter-control.sock`. The parent directory and every ancestor must belong to root or the service user, must not be writable by group or other users, and must not be symbolic links. A directory owned by another user is rejected even if currently read-only, since its owner can change its permissions. For a custom program directory, use its binary path. For a manually started service or a custom database directory, pass the matching socket explicitly:
+The installed service uses `/var/lib/porter/porter-control.sock` by default. The socket accepts only actual root peers and is not exposed on the Web port. Service startup creates it beside the database, unless `PORTER_CONTROL_SOCKET` sets another path. The CLI chooses `--socket`, then `PORTER_CONTROL_SOCKET`, then `/var/lib/porter/porter-control.sock`. The parent directory and every ancestor must belong to root or the service user, must not be writable by group or other users, and must not be symbolic links. A directory owned by another user is rejected even if currently read-only, since its owner can change its permissions. The system command also works with custom program directories. For a manually started service or a custom database directory, pass the matching socket explicitly:
 
 ```bash
-sudo /custom/porter/porter rules list --lang en --socket /custom/data/porter-control.sock
+sudo porter rules list --lang en --socket /custom/data/porter-control.sock
 ```
 
 A connection failure means you should check service status, the socket path and whether the upgraded service has restarted. Commands do not start a second service or edit an offline database.
 
-### 手工 Compose 部署
+### Manual Compose deployment
 
 Use native Linux Docker Engine and Docker Compose v2. The deployment uses host networking so newly added forwarding ports need no Compose changes.
 
@@ -273,9 +278,10 @@ export npm_config_cache="$PWD/.tmp/npm-cache"
 npm --prefix web ci
 npm --prefix web run build
 CGO_ENABLED=0 go build -trimpath -ldflags '-X main.version=dev' -o .tmp/porter ./cmd/porter
+CGO_ENABLED=0 go build -trimpath -ldflags '-X main.version=dev' -o .tmp/porterd ./cmd/porterd
 ```
 
-The resulting program embeds the web interface. No separate frontend server is required. Run it as follows, or extract the matching Linux archive from [GitHub Releases](https://github.com/lwl0820/porter/releases):
+The `porterd` service embeds the web interface; `porter` is the independent client. No separate frontend server is required. Start the service as follows, or extract both programs from the matching Linux archive in [GitHub Releases](https://github.com/lwl0820/porter/releases):
 
 ```bash
 mkdir -p data
@@ -284,10 +290,10 @@ read -rsp 'Administrator password: ' PORTER_ADMIN_PASSWORD
 echo
 export PORTER_ADMIN_PASSWORD
 export PORTER_DB_PATH="$PWD/data/porter.db"
-./.tmp/porter
+./.tmp/porterd
 ```
 
-For a release archive, use `./porter` instead. Download `SHA256SUMS` alongside the archive and verify it with `sha256sum --ignore-missing -c SHA256SUMS`. A normal user can bind high ports; low ports require suitable service privileges or `CAP_NET_BIND_SERVICE`. Use a service supervisor for automatic restarts.
+For a release archive, use `./porterd` instead. Use `sudo ./.tmp/porter rules --lang en --socket "$PWD/data/porter-control.sock"` for the source-built client, or `sudo ./porter rules ...` from an extracted archive. Native control requires the trusted directory ownership described above. Download `SHA256SUMS` alongside the archive and verify it with `sha256sum --ignore-missing -c SHA256SUMS`. Both programs in a release archive have the same version. A normal user can bind high ports; low ports require suitable service privileges or `CAP_NET_BIND_SERVICE`. Use a service supervisor for automatic restarts; a manual unit must start `porterd`.
 
 ## Upgrade, backup, and rollback
 
@@ -310,11 +316,11 @@ For a locally built image, rebuild instead of pulling. After upgrading, check lo
 
 ## Compatibility and validation
 
-生产目标包括原生二进制 + systemd，以及手工 Linux Docker Engine + Compose v2 部署，架构为 `amd64`、`arm64`；发行版目标包括 Debian 12/13、Ubuntu 22.04/24.04、RHEL 9/10，以及同系 Rocky Linux、AlmaLinux 9/10。原生安装要求 systemd 为 PID 1。首版不承诺 rootless Docker、Docker Desktop、Windows 和 macOS 的生产支持。
+Production targets are native programs with systemd, or manual Linux Docker Engine with Compose v2, on `amd64` and `arm64`. Distribution targets include Debian 12/13, Ubuntu 22.04/24.04, RHEL 9/10, Rocky Linux 9/10 and AlmaLinux 9/10. Native installation requires systemd as PID 1. Rootless Docker, Docker Desktop, Windows and macOS are not supported production targets.
 
 These are compatibility targets, not claims that every host/architecture combination has been tested. CI is configured to run native amd64 and arm64 Linux checks, real TCP/UDP integration tests, and Docker smoke tests. A successful CI run confirms those runner environments only. Debian, Ubuntu, and Red Hat family host deployment results must be recorded separately; running a distribution's container does not validate that distribution as a host. See the repository's actual workflow results before relying on a release.
 
-原生安装器检查包含模拟发行包、伪终端、systemctl 命令替身及生成 unit 的静态验证，另以独立程序验证凭据和 HTTP 行为；这些检查不能替代真实 systemd 用户切换、低端口能力或完整发行版宿主安装实测。
+Installer checks use simulated release archives, pseudo-terminals, a systemctl substitute and static unit validation, with separate program checks for credentials and HTTP behavior. They do not replace real systemd user switching, low-port capability or full distribution host installation tests.
 
 ## Development and publishing
 
@@ -325,8 +331,10 @@ npm --prefix web run lint
 npm --prefix web run type-check
 npm --prefix web run test
 npm --prefix web run build
+python3 scripts/check-build-boundaries.py
 go vet ./...
 go test -race ./...
+go test -tags porter_docker ./...
 go test -count=1 ./tests/integration/...
 docker build -t porter:local .
 python3 scripts/docker-smoke.py porter:local

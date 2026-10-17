@@ -18,12 +18,12 @@ COPY --from=frontend /src/web/dist/ ./web/dist/
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -tags porter_docker -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /src/.tmp/porter ./cmd/porter
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -tags porter_docker -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /src/.tmp/porterd ./cmd/porterd
 
 FROM scratch
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=build /src/.tmp/porter /porter
+COPY --from=build /src/.tmp/porterd /porterd
 COPY --from=build /src/.tmp/runtime-data /data
 ENV PORTER_HTTP_ADDR=0.0.0.0:8080 PORTER_DB_PATH=/data/porter.db
 EXPOSE 8080/tcp
-ENTRYPOINT ["/porter"]
+ENTRYPOINT ["/porterd"]

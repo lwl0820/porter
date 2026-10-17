@@ -25,9 +25,9 @@ Porter 使用普通代理，目标服务看到转发服务器的来源地址，�
 curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install.sh | bash
 ```
 
-支持 Ubuntu 22.04/24.04、Debian 12/13、RHEL/Rocky Linux/AlmaLinux 9/10，架构为 amd64、arm64。需要 Bash、下载入口使用的 curl，以及 root 或 sudo 权限。安装器按需从系统仓库补齐 Python 3、curl 和 CA 证书，直接下载 GitHub Actions 编译的独立程序，不需要 Docker、Go 或 Node.js；systemd 必须是 PID 1，普通发行版容器不适用。
+支持 Ubuntu 22.04/24.04、Debian 12/13、RHEL/Rocky Linux/AlmaLinux 9/10，架构为 amd64、arm64。需要 Bash、下载入口使用的 curl，以及 root 或 sudo 权限。安装器按需从系统仓库补齐 Python 3、curl 和 CA 证书，直接下载 GitHub Actions 编译的服务端与客户端，不需要 Docker、Go 或 Node.js；systemd 必须是 PID 1，普通发行版容器不适用。
 
-脚本首次先提供“中文 / English”语言选择，回车默认中文；也可在管道后使用 `bash -s -- --lang zh-CN` 或 `bash -s -- --lang en` 指定语言。帮助支持 `bash install.sh --help --lang en`，不要求交互终端。安装器自己的帮助、交互、错误和结果均随语言切换，系统命令诊断保持原样。
+脚本先提供“1 English / 2 中文”语言选择，回车默认英文；也可在管道后使用 `bash -s -- --lang zh-CN` 或 `bash -s -- --lang en` 指定语言。帮助支持 `bash install.sh --help --lang en`，不要求交互终端，未指定语言时默认英文。安装器自己的帮助、交互、错误和结果均随语言切换，系统命令诊断保持原样。安装器的选择不会预设 CLI 保存的语言。
 
 首次依次输入**管理员用户名、管理员密码、密码确认、Web 监听地址**。密码隐藏输入，不自动生成或回显。监听必须是 `IPv4:端口` 或 `[IPv6]:端口`，如 `127.0.0.1:18080`、`0.0.0.0:8080`、`[::]:8080`，端口范围为 1–65535。通配监听的远程入口需将输出中的回环地址替换为服务器 IP。管理端口只应开放给可信网络；安装器不配置防火墙或 HTTPS。
 
@@ -44,15 +44,18 @@ curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install
 
 | 项目 | 位置 |
 | --- | --- |
-| 程序 | `/opt/porter/porter` |
+| 服务程序 | `/opt/porter/porterd` |
+| 命令行客户端 | `/opt/porter/porter` |
+| 系统命令 | `/usr/bin/porter`，指向实际客户端的托管链接 |
 | 管理员及监听配置 | `/etc/porter/porter.env`，权限 `600` |
+| CLI 语言偏好 | `/etc/porter/cli.json`，权限 `600`，首次选择语言后创建 |
 | 安装记录 | `/etc/porter/install.json`，权限 `600` |
 | SQLite 及日志文件 | `/var/lib/porter`，专用用户可写 |
 | systemd unit | `/etc/systemd/system/porter.service` |
 
 服务以禁止登录的专用系统用户和组 `porter` 运行，限制能力为 `CAP_NET_BIND_SERVICE`，支持低端口绑定、异常重启和开机启动。配置按 systemd `EnvironmentFile` 格式保存，值统一使用双引号，内部的反斜线、双引号、美元符和反引号需要加反斜线；例如字面 `$` 写作 `\$`、字面 `\` 写作 `\\`。不要 `source` 此文件，也不要按 Compose 规则写 `$$`。需要额外环境变量时，可按相同双引号格式追加 `PORTER_COOKIE_SECURE="true"` 等 `PORTER_*` 项。修改配置后执行 `sudo systemctl restart porter.service`。
 
-重复运行相同目录的安装命令会保留账号、监听地址、程序和数据库，不自动升级；首次局部失败可重试，已保存凭据会复用。已有安装不接受不同的 `--version`。发现未知的同名账号、服务、配置或数据时会退出，不自动接管；也不迁移已有 Docker 数据。仅在服务已启动、已启用且用户指定地址的 `/healthz` 就绪后报告成功。
+重复运行相同目录的安装命令会保留账号、监听地址、程序和数据库，不自动升级；首次局部失败可重试，已保存凭据会复用。版本变化必须使用 `--upgrade`，单独指定不同的 `--version` 会被拒绝。已托管的系统入口缺失时可补齐；未知文件、链接或悬空链接不会覆盖，同目标手工链接也不会自动认领。直接使用 `--install-dir /usr/bin` 时，由该目录中的客户端本身提供命令。发现未知的同名账号、服务、配置或数据时会退出，不自动接管；也不迁移已有 Docker 数据。仅在服务已启动、已启用且用户指定地址的 `/healthz` 就绪后报告成功。
 
 安装就绪后会分别输出普通用户 `/user/` 与管理员 `/admin/` 地址；直接访问根地址也进入普通用户端。普通用户账号仍由管理员在管理端创建。
 
@@ -63,7 +66,7 @@ curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install
   bash -s -- --uninstall --lang zh-CN
 ```
 
-卸载列出资源并要求输入 `yes`，回车取消；默认停止服务、取消开机启动并删除托管程序和 unit，保留完整 `/var/lib/porter`、`/etc/porter/porter.env`、受限安装记录以及专用账号/组。使用新版脚本按原程序目录重新安装，会复用原凭据、监听和数据库，并重新下载记录的**同一版本**；该版本 Release 必须仍可下载，下载失败不会清空配置或数据。旧版脚本不认识卸载后的状态，请勿用于恢复。卸载中断会保留恢复记录，先以相同卸载选项重试，再重新安装。
+卸载列出资源并要求输入 `yes`，回车取消；默认停止服务、取消开机启动并删除托管程序、unit 和系统命令链接，保留完整 `/var/lib/porter`、`/etc/porter/porter.env`、`/etc/porter/cli.json`、受限安装记录以及专用账号/组。使用新版脚本按原程序目录重新安装，会复用原凭据、监听、数据库及 CLI 语言，并恢复记录的**同一版本和布局**；该版本 Release 必须仍可下载，下载失败不会清空配置或数据。旧版脚本不认识双程序布局，请勿用于恢复。卸载中断会保留恢复记录，先以相同卸载选项重试，再重新安装。
 
 彻底删除需另加 `--purge`，在 `yes` 后再次输入 `DELETE`；账号、规则和统计将永久丢失：
 
@@ -72,7 +75,7 @@ curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install
   bash -s -- --uninstall --purge --lang zh-CN
 ```
 
-彻底删除清理托管配置、完整数据目录、安装记录和专用账号/组；两种卸载方式都会在验证路径和文件类型后，清理安装器未提交的 `porter.env.new`、`install.json.new`、`porter.service.new` 和 `.porter.new`。程序目录和配置目录中的其他额外文件保留。取消或无交互终端不会开始卸载。脚本拒绝未知服务、被修改的 unit、自定义 systemd 覆盖配置、符号链接及不匹配的专用账号，不删除共享日志、系统软件包或 Docker 资源。`--purge` 必须配合 `--uninstall`，卸载不接受 `--version`。
+彻底删除清理服务配置 `porter.env`、CLI 配置 `cli.json`、完整数据目录、安装记录和专用账号/组；两种卸载方式都会在验证路径和文件类型后，清理安装器未提交的临时文件。程序目录和配置目录中的其他额外文件保留。取消或无交互终端不会开始卸载。脚本在停服前拒绝未知服务、被修改的 unit、自定义 systemd 覆盖配置、被替换的配置节点及不匹配的专用账号，仅删除已验证托管的系统链接，不删除共享日志、系统软件包或 Docker 资源。`--purge` 必须配合 `--uninstall`，卸载不接受 `--version` 或 `--upgrade`。
 
 强制中断可能在程序目录的历史 `.tmp` 内容中留下临时配置或凭据副本。两种卸载方式都会保留这些无法确认归属的文件；请在人工清理前逐项核对，彻底删除也不会清除未知历史副本。
 
@@ -85,54 +88,56 @@ sudo systemctl stop porter.service
 sudo systemctl start porter.service
 ```
 
-原生实例升级前先停服务并备份完整数据目录、配置、unit 和原程序；不要复制运行中的单个数据库文件。默认安装位置可使用：
+托管安装升级或从旧单程序布局迁移时，使用新版安装器并显式添加 **`--upgrade`**。不指定 `--version` 时选择最新正式 Release；也可固定为已经发布的双程序版本：
 
 ```bash
-sudo systemctl stop porter.service
-install -d -m 0700 "$PWD/backups"
-sudo tar -czf "$PWD/backups/porter-before-upgrade.tar.gz" -C / \
-  etc/porter var/lib/porter etc/systemd/system/porter.service
-sudo chmod 0600 "$PWD/backups/porter-before-upgrade.tar.gz"
-sudo cp /opt/porter/porter "$PWD/backups/porter.previous"
+curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install.sh | \
+  bash -s -- --upgrade --lang zh-CN
+# 固定目标时追加：--version vX.Y.Z
 ```
 
-随后从目标版本 Release 下载本机架构的压缩包和 `SHA256SUMS`，在独立的 `.tmp/porter-upgrade` 目录用 `sha256sum --ignore-missing -c SHA256SUMS` 确认该压缩包校验成功，再解出其中的 `porter`。不要通过重跑一键命令升级。将下方源路径替换为校验后程序的位置，自定义安装目录时同步修改目标路径：
+安装器在停服前验证当前托管安装、目标包摘要和两个程序的版本，显示源版本、目标版本及停机范围并要求确认。升级会短暂中断转发；停服后备份旧程序、unit、原始安装记录、配置和**完整数据目录**，再成套切换程序和 unit。两个程序必须来自同一版本。降级、单程序目标包、定制 unit 或冲突的目标文件会被拒绝；相同版本的完整双程序安装仅做幂等检查。
 
-```bash
-sudo install -m 0755 .tmp/porter-upgrade/porter /opt/porter/porter.new
-sudo mv /opt/porter/porter.new /opt/porter/porter
-sudo systemctl start porter.service
-sudo journalctl -u porter.service -n 30 --no-pager
-```
+数据目录 `/var/lib/porter` 自身不能是挂载点（包括绑定挂载），否则安装器会在停服或修改安装前拒绝升级，以保证完整目录回退可用；其父目录（例如 `/var`）位于独立文件系统不受此限制。
 
-重启后验证登录、健康端点及实际 TCP/UDP 收发。显式升级后如继续使用安装器，请将 `/etc/porter/install.json` 的 `version` 同步为实际版本标签，保留其余字段和 `600` 权限。回退时先停服务，同时恢复原程序与匹配的**完整数据及配置备份**；旧程序不能直接使用已升级的数据库。上述原生操作与下方 Docker 卷备份相互独立。
+失败时恢复匹配的旧程序、配置、完整数据和原服务状态。强制中断后，重新执行新版安装器命令；这次先恢复稳定安装并退出，恢复成功后，再次执行所需的升级或卸载命令。
+
+备份保存在程序目录的 `.tmp/upgrade.<标识>` 下，默认位置为 `/opt/porter/.tmp/upgrade.<标识>`，安装器会输出准确路径。备份包括旧程序、unit、安装记录、服务及 CLI 配置和完整数据，可能包含凭据，须保持受限权限；purge 也会保留历史升级备份。 回滚隔离的新版数据位于数据目录父目录 `.porter-failed-upgrade.<标识>`（默认 `/var/lib/.porter-failed-upgrade.<标识>`），同样保留且可能含业务数据，需核对后人工清理。恢复失败时保留安装记录、备份及错误中指出的恢复目录，不要用另一轮安装覆盖它们，也不要单独恢复某个数据库文件。
+
+普通重跑旧安装仍保留原版本和服务布局，不会宣称已安装独立客户端。**v0.2.0 不含规则 CLI**：执行其中的 `porter rules` 可能提示必须设置 `PORTER_ADMIN_USERNAME` 和 `PORTER_ADMIN_PASSWORD`。先用 `/opt/porter/porter --version` 确认版本，双程序 Release 可用后显式升级；导出 Web 密码不能解决旧版缺少 CLI 的问题。
+
+手工安装或定制 unit 应先停服，备份完整数据、配置、unit 和旧程序。校验目标归档的 `SHA256SUMS` 后同时安装 `porter`、`porterd`，将 unit 的 `ExecStart` 从旧 `porter` 改为 `porterd` 再启动。安装器不会接管定制 unit，不要手工修改安装记录绕过检查。验证登录、健康端点及实际 TCP/UDP 收发；回退时同时恢复旧程序与匹配的**完整数据及配置备份**，不要只替换一个程序。上述原生操作与下方 Docker 卷备份相互独立。
 
 ### 原生命令行规则管理
 
-使用已安装的程序，以 root 或 `sudo` 身份获得管理员规则权限，无须输入 Web 管理员账号密码。Porter 服务必须正在运行；命令通过本机 Unix 套接字访问服务，操作即时生效并同步到 Web 后台。升级程序后需重启服务以启用控制套接字。此功能仅支持原生 Linux：Docker 镜像在构建时禁用规则命令和本机控制入口，原生程序在识别到容器环境时也会拒绝规则管理。Docker 部署请使用 Web 后台。
+`porterd` 是常驻服务，`porter` 是独立命令行客户端。一键安装将 `porter` 加入系统 PATH，默认及自定义安装目录均可直接调用。以 root 或 `sudo` 身份获得管理员规则权限，无须输入 Web 管理员账号密码。执行规则操作时服务必须正在运行；命令通过本机 Unix 套接字访问服务，操作即时生效并同步到 Web 后台。此功能仅支持原生 Linux：Docker 镜像仅包含 `/porterd`，在构建时禁用本机控制入口；原生客户端在识别到容器环境时也会拒绝规则管理。Docker 部署请使用 Web 后台；外部命令若硬编码了旧 `/porter` 路径，服务操作需改为 `/porterd`。
 
 进入交互菜单：
 
 ```bash
-sudo /opt/porter/porter rules
-sudo /opt/porter/porter rules --lang zh-CN
+sudo porter
+# 原有入口也保留：
+sudo porter rules
+sudo porter rules --lang zh-CN
 ```
 
-未指定 `--lang` 时，**第一步选择中文或 English**。空白或无效选择会重新提示，不默认选择，也不保存上次选择。指定 `--lang zh-CN` 或 `--lang en` 可跳过语言选择。菜单提供创建、列表、详情、修改、删除及退出；从当前列表选择规则，修改时可保留当前值，删除需确认且默认取消。取消未完成操作不会提交，已完成操作继续保留。语言选择和菜单输入使用控制终端（`/dev/tty`），不混入标准输出，也不消费重定向的标准输入。交互菜单即使指定语言仍需要终端，不接受 `--json`。
+首次未指定 `--lang` 时，**先选择 1 English 或 2 中文，回车默认英文**。选择保存在 `/etc/porter/cli.json`，后续启动直接复用，root 与 sudo 共用。`--lang en` 或 `--lang zh-CN` 仅覆盖本次语言，不修改保存值；交互菜单的“切换语言”选项用于更改并保存偏好。语言配置独立于服务、Web 凭据和数据库；写入失败会明确提示，本次仍使用所选语言，损坏配置会给出诊断而非静默覆盖。普通卸载保留该文件，purge 删除。
 
-直接参数调用及无人值守脚本应提供动作、完整必填参数及 `--lang`：
+菜单提供创建、列表、详情、修改、删除、切换语言及退出；从当前列表选择规则，修改时可保留当前值，删除需确认且默认取消。取消未完成操作不会提交，已完成操作继续保留。语言选择和菜单输入使用控制终端（`/dev/tty`），不混入标准输出，也不消费重定向的标准输入。交互菜单即使指定语言仍需要终端，不接受 `--json`。
+
+直接参数调用及无人值守脚本应提供动作及完整必填参数；显式 `--lang` 在尚未保存语言时也可使用：
 
 ```bash
-sudo /opt/porter/porter rules add --lang zh-CN \
+sudo porter rules add --lang zh-CN \
   --name 网站转发 --protocol tcp --listen-host 0.0.0.0 --listen-port 18081 \
   --target-host example.com --target-port 80 --enabled=true --traffic-enabled=false
-sudo /opt/porter/porter rules list --lang zh-CN
-sudo /opt/porter/porter rules get 规则ID --lang zh-CN --json
-sudo /opt/porter/porter rules update 规则ID --lang zh-CN --enabled=false
-sudo /opt/porter/porter rules delete 规则ID --lang zh-CN
+sudo porter rules list --lang zh-CN
+sudo porter rules get 规则ID --lang zh-CN --json
+sudo porter rules update 规则ID --lang zh-CN --enabled=false
+sudo porter rules delete 规则ID --lang zh-CN
 ```
 
-将 `规则ID` 替换为创建或列表返回的稳定 ID。协议值为 `tcp`、`udp`、`tcp+udp`。参数命令缺少字段会直接报错，不进入向导补问；无控制终端且未指定 `--lang` 时，在执行规则操作前退出。**参数方式的 `delete` 立即删除，没有二次确认。**
+将 `规则ID` 替换为创建或列表返回的稳定 ID。协议值为 `tcp`、`udp`、`tcp+udp`。参数命令缺少字段会直接报错，不进入向导补问；无控制终端、无保存偏好且未指定 `--lang` 时，在执行规则操作前退出。**参数方式的 `delete` 立即删除，没有二次确认。**
 
 | 命令 | 参数及行为 |
 | --- | --- |
@@ -146,10 +151,10 @@ sudo /opt/porter/porter rules delete 规则ID --lang zh-CN
 
 管理员可管理所有归属的规则。创建时通过 `--owner-id 用户ID` 指定已有用户，仍须遵守该用户的分配端口及流量额度；已有用户 ID 可从已登录的 Web 管理 API 获取（`GET /api/admin/users` 返回的账号中取 `user.id`）。修改不转移归属。命令行仅管理规则，用户、套餐、端口池、重试及统计清零继续通过 Web 后台处理。修改和删除执行版本检查，并发变更时失败，须重新查询后再操作；脚本可用 `--revision N` 固定先前读取的版本。请求超时后应先查询结果，再决定是否重新提交。
 
-原生安装服务默认使用 `/var/lib/porter/porter-control.sock`，只接受真实 root 对端，不在 Web 端口暴露入口。服务启动时在数据库目录旁创建 `porter-control.sock`，可用 `PORTER_CONTROL_SOCKET` 覆盖；CLI 路径优先级为 `--socket`、`PORTER_CONTROL_SOCKET`、`/var/lib/porter/porter-control.sock`。父目录及全部祖先目录必须归属 root 或服务用户，不能对组或其他用户开放写权限，也不能是符号链接。其他用户拥有的目录即使当前只读也会被拒绝，因为其所有者仍能修改权限。自定义安装目录时使用对应程序路径；手动启动服务或使用自定义数据库目录时，显式指定匹配的控制路径：
+原生安装服务默认使用 `/var/lib/porter/porter-control.sock`，只接受真实 root 对端，不在 Web 端口暴露入口。服务启动时在数据库目录旁创建 `porter-control.sock`，可用 `PORTER_CONTROL_SOCKET` 覆盖；CLI 路径优先级为 `--socket`、`PORTER_CONTROL_SOCKET`、`/var/lib/porter/porter-control.sock`。父目录及全部祖先目录必须归属 root 或服务用户，不能对组或其他用户开放写权限，也不能是符号链接。其他用户拥有的目录即使当前只读也会被拒绝，因为其所有者仍能修改权限。自定义程序目录也可使用系统命令；手动启动服务或使用自定义数据库目录时，显式指定匹配的控制路径：
 
 ```bash
-sudo /custom/porter/porter rules list --lang zh-CN --socket /custom/data/porter-control.sock
+sudo porter rules list --lang zh-CN --socket /custom/data/porter-control.sock
 ```
 
 连接失败时，检查服务状态、控制路径和升级后是否已重启。命令不会另起服务或离线修改数据库。
@@ -281,9 +286,10 @@ export npm_config_cache="$PWD/.tmp/npm-cache"
 npm --prefix web ci
 npm --prefix web run build
 CGO_ENABLED=0 go build -trimpath -ldflags '-X main.version=dev' -o .tmp/porter ./cmd/porter
+CGO_ENABLED=0 go build -trimpath -ldflags '-X main.version=dev' -o .tmp/porterd ./cmd/porterd
 ```
 
-生成的程序已内嵌前端，无需独立前端服务器。也可从 [GitHub Releases](https://github.com/lwl0820/porter/releases) 下载相应架构的 Linux 压缩包并解压。运行方式如下：
+服务端 `porterd` 已内嵌前端，`porter` 是独立客户端，无需独立前端服务器。也可从 [GitHub Releases](https://github.com/lwl0820/porter/releases) 下载相应架构的 Linux 压缩包，解出两个程序。启动服务的方式如下：
 
 ```bash
 mkdir -p data
@@ -292,10 +298,10 @@ read -rsp '管理员密码：' PORTER_ADMIN_PASSWORD
 echo
 export PORTER_ADMIN_PASSWORD
 export PORTER_DB_PATH="$PWD/data/porter.db"
-./.tmp/porter
+./.tmp/porterd
 ```
 
-使用发布压缩包时，将最后一行改为 `./porter`。同时下载 `SHA256SUMS`，使用 `sha256sum --ignore-missing -c SHA256SUMS` 校验已下载的压缩包。普通用户可监听高端口；低端口需要适当的服务权限或 `CAP_NET_BIND_SERVICE`。长期运行时请配置服务管理器以自动重启。
+使用发布压缩包时，将最后一行改为 `./porterd`。源码构建的客户端可用 `sudo ./.tmp/porter rules --lang zh-CN --socket "$PWD/data/porter-control.sock"`，发行包客户端使用 `sudo ./porter rules ...`；本机控制目录须满足上文的可信归属限制。同时下载 `SHA256SUMS`，使用 `sha256sum --ignore-missing -c SHA256SUMS` 校验已下载的压缩包，包内两个程序版本一致。普通用户可监听高端口；低端口需要适当的服务权限或 `CAP_NET_BIND_SERVICE`。长期运行时请配置服务管理器以自动重启，手工 unit 的启动程序应为 `porterd`。
 
 ## 升级、备份和回退
 
@@ -333,8 +339,10 @@ npm --prefix web run lint
 npm --prefix web run type-check
 npm --prefix web run test
 npm --prefix web run build
+python3 scripts/check-build-boundaries.py
 go vet ./...
 go test -race ./...
+go test -tags porter_docker ./...
 go test -count=1 ./tests/integration/...
 docker build -t porter:local .
 python3 scripts/docker-smoke.py porter:local

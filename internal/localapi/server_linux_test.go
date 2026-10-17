@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux && !porter_docker
 
 package localapi
 
@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lwl0820/porter/internal/controlapi"
 	"github.com/lwl0820/porter/internal/forward"
 	"github.com/lwl0820/porter/internal/model"
 	"github.com/lwl0820/porter/internal/native"
@@ -56,7 +57,8 @@ type fixture struct {
 	admin   model.User
 	path    string
 	server  *Server
-	client  *Client
+	client  *controlapi.Client
+	http    *http.Client
 }
 
 func setup(t *testing.T) *fixture {
@@ -91,7 +93,10 @@ func setup(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.client = NewClient(f.path)
+	f.client = controlapi.NewClient(f.path)
+	f.http = &http.Client{Transport: &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", f.path)
+	}}}
 	t.Cleanup(func() {
 		if err := f.server.Close(); err != nil {
 			t.Error(err)
@@ -179,7 +184,7 @@ func TestPeerCredentialsRejectNonRootAndForgedHeaders(t *testing.T) {
 	req.Header.Set("X-User-ID", model.AdminID)
 	req.Header.Set("X-Role", "admin")
 	req.Header.Set("X-Forwarded-For", "127.0.0.1")
-	resp, err := f.client.http.Do(req)
+	resp, err := f.http.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +467,7 @@ func TestRootConcurrentRevisionAndStrictInput(t *testing.T) {
 		req, _ := http.NewRequest("PUT", "http://localhost/v1/rules/"+old.ID, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("If-Match", `"2"`)
-		resp, e := f.client.http.Do(req)
+		resp, e := f.http.Do(req)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -471,8 +476,8 @@ func TestRootConcurrentRevisionAndStrictInput(t *testing.T) {
 			t.Fatalf("非法输入未拒绝：%d", resp.StatusCode)
 		}
 	}
-	var out model.Rule
-	code(t, f.client.request(ctx, "PUT", resource+"/"+old.ID, 0, in.Input, &out), "revision_required")
+	_, err = f.client.Update(ctx, old.ID, 0, in.Input)
+	code(t, err, "revision_required")
 	_, err = f.client.Get(ctx, "missing")
 	code(t, err, "not_found")
 	bad := testInput("tcp", freePort(t), 80)

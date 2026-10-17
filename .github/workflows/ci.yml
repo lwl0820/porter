@@ -54,9 +54,17 @@ jobs:
           npm --prefix web run build
       - name: Run Go static analysis, race tests, and network integration tests
         run: |
+          python3 scripts/check-build-boundaries.py
           go vet ./...
           go test -race ./...
+          go test -tags porter_docker ./...
           go test -count=1 ./tests/integration/...
+      - name: Build and verify both native programs
+        run: |
+          for program in porter porterd; do
+            CGO_ENABLED=0 go build -trimpath -ldflags '-X main.version=ci' -o ".tmp/$program" "./cmd/$program"
+            test "$(".tmp/$program" --version)" = ci
+          done
       - name: Validate required Compose password
         run: |
           PORTER_ADMIN_PASSWORD=validation-only docker compose config --quiet

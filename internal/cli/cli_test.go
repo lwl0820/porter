@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/lwl0820/porter/internal/localapi"
+	"github.com/lwl0820/porter/internal/controlapi"
 	"github.com/lwl0820/porter/internal/model"
 	"github.com/lwl0820/porter/internal/testutil"
 )
@@ -77,7 +77,7 @@ func TestHelpAndUsageBeforePermissionsWithoutService(t *testing.T) {
 		if rc != 2 || out.Len() != 0 {
 			t.Fatal("参数错误出口错误")
 		}
-		var got struct{ Error localapi.Error }
+		var got struct{ Error controlapi.Error }
 		if err := json.Unmarshal(stderr.Bytes(), &got); err != nil || got.Error.Code != "no_changes" {
 			t.Fatalf("错误JSON无效：%s", &stderr)
 		}
@@ -96,8 +96,8 @@ func TestErrorTranslationsAreSelectedAndStructured(t *testing.T) {
 			if code == "usage_error" {
 				detail = "--flag"
 			}
-			r.fail(&localapi.Error{Code: code, Message: detail, Fields: map[string]string{"listen_port": "动态中文", "target_host": "动态中文", "future": "动态中文"}}, true)
-			var got struct{ Error localapi.Error }
+			r.fail(&controlapi.Error{Code: code, Message: detail, Fields: map[string]string{"listen_port": "动态中文", "target_host": "动态中文", "future": "动态中文"}}, true)
+			var got struct{ Error controlapi.Error }
 			if err := json.Unmarshal(stderr.Bytes(), &got); err != nil || got.Error.Code != code {
 				t.Fatal("错误包络不可解析")
 			}
@@ -217,7 +217,7 @@ func TestReadMergeWriteAndExplicitRevision(t *testing.T) {
 	}
 	f.afterGet = func() { f.rule.Revision++ }
 	_, err = r.execute(o)
-	var e *localapi.Error
+	var e *controlapi.Error
 	if !errors.As(err, &e) || e.Code != "revision_mismatch" {
 		t.Fatal("读后并发变更未拒绝")
 	}
@@ -311,21 +311,22 @@ func TestMenuUsesDisplayedRevision(t *testing.T) {
 		}
 	}
 }
-func TestLanguageSelectionRepeatsInvalidAndCancelsWithoutDefault(t *testing.T) {
+func TestLanguageSelectionDefaultsEnglishAndCancelsWithoutSaving(t *testing.T) {
 	for _, tc := range []struct {
 		input, lang string
 		ended       bool
-	}{{"\ninvalid\n2\n", "en", false}, {"1\n", "zh-CN", false}, {"q\n", "", true}, {"2", "", true}} {
+	}{{"\n", "en", false}, {"invalid\n2\n", "zh-CN", false}, {"1\n", "en", false}, {"en\n", "en", false}, {"zh-CN\n", "zh-CN", false}, {"q\n", "", true}, {"2", "", true}} {
 		r, out := scriptedRunner(t, "", tc.input, &fakeAPI{})
 		lang, err := r.tty.language()
 		if lang != tc.lang || (err != nil) != tc.ended {
 			t.Fatalf("语言选择错误：%s %v", lang, err)
 		}
-		if tc.input == "\ninvalid\n2\n" && strings.Count(out(), "语言 / Language") != 3 {
+		if tc.input == "invalid\n2\n" && strings.Count(out(), "Language / 语言") != 2 {
 			t.Fatal("无效输入未重新提示")
 		}
 	}
 }
+
 func TestTerminalCancellationAndExactCounters(t *testing.T) {
 	r, _ := scriptedRunner(t, "en", "", &fakeAPI{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -355,7 +356,7 @@ func TestUnknownTopLevelCommandAndLocalizedRuleJSON(t *testing.T) {
 	rule := testRule()
 	rule.LastError = "动态中文"
 	rule.LastErrorCode = "listen_failed"
-	value := r.localizeResult(localapi.RuleList{Rules: []model.Rule{rule}}).(localapi.RuleList)
+	value := r.localizeResult(controlapi.RuleList{Rules: []model.Rule{rule}}).(controlapi.RuleList)
 	assertNoChinese(t, value.Rules[0].LastError)
 	if value.Rules[0].LastErrorCode != "listen_failed" || value.Rules[0].Status != rule.Status {
 		t.Fatal("翻译修改了稳定标识")
