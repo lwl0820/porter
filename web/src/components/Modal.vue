@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import LanguageSwitcher from "./LanguageSwitcher.vue";
 import { nextTick, onMounted, onUnmounted, ref } from "vue";
 
 defineProps<{ label: string; busy?: boolean; drawer?: boolean }>();
@@ -28,6 +29,7 @@ onUnmounted(() => {
     @cancel.prevent="!busy && emit('close')"
     @click="$event.target === dialog && !busy && emit('close')"
   >
+    <div class="modal-language"><LanguageSwitcher /></div>
     <slot />
   </dialog>
 </template>

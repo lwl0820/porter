@@ -1,0 +1,234 @@
+import { readonly, ref } from "vue";
+
+// 中文原文作为词条键，英文词典与键集合由同一份类型约束。
+const english = {
+  "语言": "Language",
+  "Porter · 端口转发": "Porter · Port forwarding",
+  "Porter 端口转发管理面板": "Porter port forwarding dashboard",
+  "正在连接 Porter…": "Connecting to Porter…",
+  "重新连接": "Reconnect",
+  "Porter 介绍": "About Porter",
+  "Porter 首页": "Porter home",
+  "让连接井然有序": "Keep every connection in order",
+  "每一个端口，": "Every port,",
+  "都有清晰的去向。": "a clear destination.",
+  "在一个面板中管理 TCP 与 UDP 转发，": "Manage TCP and UDP forwarding in one place.",
+  "让你的服务轻松连接。": "Connect your services with ease.",
+  "本机端口": "Local port",
+  "目标服务": "Target service",
+  "简单连接 · 轻松掌控": "Simple connections. Effortless control.",
+  "欢迎回来": "Welcome back",
+  "登录以管理你的端口转发规则": "Sign in to manage your forwarding rules",
+  "用户名": "Username",
+  "请输入管理员用户名": "Enter administrator username",
+  "密码": "Password",
+  "请输入密码": "Enter password",
+  "正在登录…": "Signing in…",
+  "登录面板": "Sign in",
+  "仅限授权管理员访问": "Authorized administrators only",
+  "Porter · 端口转发管理": "Porter · Port forwarding management",
+  "跳转到主内容": "Skip to main content",
+  "端口转发": "Port forwarding",
+  "退出登录": "Sign out",
+  "网络管理": "NETWORK MANAGEMENT",
+  "为你的服务建立连接，统一管理每一条转发规则。": "Connect your services and manage every forwarding rule.",
+  "新增规则": "Add rule",
+  "规则概览": "Rule overview",
+  "全部规则": "All rules",
+  "运行中": "Running",
+  "已停用": "Disabled",
+  "错误": "Error",
+  "需要关注": "Needs attention",
+  "条": "rules",
+  "关闭错误提示": "Dismiss error",
+  "转发规则列表": "Forwarding rule list",
+  "转发规则": "Forwarding rules",
+  "每 5 秒同步": "Syncs every 5 seconds",
+  "搜索规则": "Search rules",
+  "搜索规则名称、IP 或域名…": "Search by name, IP or hostname…",
+  "按协议筛选": "Filter by protocol",
+  "全部协议": "All protocols",
+  "按状态筛选": "Filter by status",
+  "全部状态": "All statuses",
+  "刷新规则": "Refresh rules",
+  "刷新": "Refresh",
+  " 当前保留上次同步的数据。": " Showing the last synced data.",
+  "重试": "Retry",
+  "正在加载规则": "Loading rules",
+  "稍等片刻，正在同步你的转发配置。": "Please wait while your forwarding configuration syncs.",
+  "暂时无法获取规则": "Unable to load rules",
+  "请检查网络连接，然后重新尝试。": "Check your connection and try again.",
+  "重新加载": "Reload",
+  "规则名称": "Rule name",
+  "协议": "Protocol",
+  "监听地址": "Listen address",
+  "转发目标": "Forwarding target",
+  "运行状态": "Status",
+  "速度与流量": "Speed and traffic",
+  "操作": "Actions",
+  "本机监听正常，不代表目标服务始终可达": "The local listener is active; the target service may still be unavailable.",
+  "没有找到匹配的规则": "No matching rules",
+  "从第一条规则开始": "Start with your first rule",
+  "试试其他关键词，或调整筛选条件。": "Try another search or adjust the filters.",
+  "添加本机监听端口和目标地址，即可开始转发。": "Add a local port and target address to start forwarding.",
+  "清除筛选": "Clear filters",
+  "最后同步 {time}": "Last synced {time}",
+  "显示 {shown} 条，共 {total} 条规则": "Showing {shown} of {total} rules",
+  "共 {total} 条规则": "{total} rules",
+  "“运行中”表示本机监听正常。停用规则会立即断开现有会话。": "“Running” means the local listener is active. Disabling a rule disconnects its existing sessions immediately.",
+  "尚未同步": "Not synced yet",
+  "重置流量": "Reset traffic",
+  "重置流量？": "Reset traffic?",
+  "确定清空 {name} 的上下行累计流量吗？": "Clear the total upload and download traffic for {name}?",
+  "此操作无法撤销，不会影响转发连接或统计开关。": "This cannot be undone. Forwarding connections and the traffic setting are unaffected.",
+  "取消": "Cancel",
+  "正在重置…": "Resetting…",
+  "确认重置": "Confirm reset",
+  "删除规则": "Delete rule",
+  "删除这条规则？": "Delete this rule?",
+  "确定删除 {name} 吗？": "Delete {name}?",
+  "转发将立即停止，现有会话会被断开。此操作无法撤销。": "Forwarding stops immediately and existing sessions disconnect. This cannot be undone.",
+  "保留规则": "Keep rule",
+  "正在删除…": "Deleting…",
+  "确认删除": "Confirm delete",
+  "编辑规则": "Edit rule",
+  "关闭表单": "Close form",
+  "将本机端口的流量转发到指定的目标服务。": "Forward traffic from a local port to a target service.",
+  "例如：应用服务": "e.g. Application service",
+  "传输协议": "Transport protocol",
+  "本机监听": "Local listener",
+  "监听 IP": "Listen IP",
+  "0.0.0.0 监听所有 IPv4 地址；IPv6 使用 ::。": "Use 0.0.0.0 for all IPv4 addresses, or :: for IPv6.",
+  "监听端口": "Listen port",
+  "转发到": "Forward to",
+  "目标主机": "Target host",
+  "10.0.0.2 或 example.com": "10.0.0.2 or example.com",
+  "目标端口": "Target port",
+  "流量统计": "Traffic statistics",
+  "记录上下行流量与速度": "Record upload and download traffic and speeds",
+  "启用规则": "Enable rule",
+  "保存后立即开始监听和转发": "Start listening and forwarding immediately after saving",
+  "修改转发参数会断开该规则的现有会话。仅修改名称或流量统计不会影响转发。": "Changing forwarding settings disconnects existing sessions for this rule. Changing only the name or traffic setting does not affect forwarding.",
+  "正在保存…": "Saving…",
+  "保存规则": "Save rule",
+  "可靠的连接传输": "Reliable connection-based transport",
+  "轻量的数据报传输": "Lightweight datagram transport",
+  "同时转发两种协议": "Forward both protocols together",
+  "重试 {name}": "Retry {name}",
+  "停用 {name}": "Disable {name}",
+  "启用 {name}": "Enable {name}",
+  "编辑 {name}": "Edit {name}",
+  "删除 {name}": "Delete {name}",
+  "停用规则，会断开现有会话": "Disable rule and disconnect existing sessions",
+  "编辑": "Edit",
+  "删除": "Delete",
+  "当前速度 · 累计流量": "Current speed · Total traffic",
+  "统计已关闭": "Statistics off",
+  "重置 {name} 的流量": "Reset traffic for {name}",
+  "客户端到目标": "Client to target",
+  "目标到客户端": "Target to client",
+  "↑ 上行": "↑ Upload",
+  "↓ 下行": "↓ Download",
+  "登录已过期，请重新登录。": "Your session expired. Please sign in again.",
+  "规则已更新": "Rule updated",
+  "规则已创建": "Rule created",
+  "规则已在其他页面变更，请刷新后重新编辑。": "This rule changed in another page. Refresh before editing again.",
+  "已重新尝试启动规则": "Retried starting the rule",
+  "规则已启用": "Rule enabled",
+  "规则已停用，现有会话已断开": "Rule disabled and existing sessions disconnected",
+  "流量已重置": "Traffic reset",
+  "规则已删除": "Rule deleted",
+  "请输入 1–80 个字符的规则名称。": "Enter a rule name with 1–80 characters.",
+  "请输入有效的 IPv4 或 IPv6 地址。": "Enter a valid IPv4 or IPv6 address.",
+  "请输入 1–65535 的整数端口。": "Enter an integer port from 1 to 65535.",
+  "请输入 IP 地址或域名，不含协议、路径或端口。": "Enter an IP address or hostname without a scheme, path or port.",
+  "登录信息无效，请重新登录。": "Invalid session response. Please sign in again.",
+  "服务器返回的规则格式无效，请刷新重试。": "Invalid rule response. Refresh and try again.",
+  "服务器返回的规则列表无效，请刷新重试。": "Invalid rule list response. Refresh and try again.",
+  "无法连接服务器，请检查网络后重试。": "Unable to reach the server. Check your connection and try again.",
+  "规则已在其他页面更新，请关闭表单并刷新后重新编辑。": "This rule was updated in another page. Close the form and refresh before editing again.",
+  "操作失败，请稍后重试。": "Operation failed. Please try again later.",
+  "用户名或密码错误": "Incorrect username or password",
+  "请先登录": "Please sign in first",
+  "请求校验失败，请刷新页面后重试": "Request verification failed. Refresh the page and try again.",
+  "请求来源无效": "Invalid request origin",
+  "登录尝试过于频繁，请稍后重试": "Too many sign-in attempts. Please try again later.",
+  "请检查表单内容": "Please check the form fields",
+  "请提供当前规则版本": "The current rule revision is required.",
+  "规则版本无效": "Invalid rule revision",
+  "请求必须使用 JSON": "The request must use JSON.",
+  "请求只能包含一个 JSON 对象": "The request must contain exactly one JSON object.",
+  "请提供规则启用状态": "The rule enabled setting is required.",
+  "请求格式或字段无效": "Invalid request format or fields",
+  "接口不存在": "The requested resource was not found.",
+  "服务正在停止": "The service is shutting down.",
+  "规则不存在": "Rule not found",
+  "最多保存 1000 条规则": "A maximum of 1000 rules can be saved.",
+  "请先启用规则": "Enable the rule first.",
+  "TCP 监听地址与面板管理端口冲突": "The TCP listener conflicts with the dashboard management port.",
+  "{protocol} 监听地址和端口已被规则使用": "The {protocol} listen address and port are already used by a rule.",
+  "目标不能指向规则自身的监听地址": "The target cannot point to this rule’s own listen address.",
+  "规则保存失败，原配置保持不变": "Saving failed. The previous configuration is unchanged.",
+  "删除失败，规则保持不变": "Deletion failed. The rule is unchanged.",
+  "重置失败，原统计保持不变": "Reset failed. The previous counters are unchanged.",
+  "流量重置失败，原统计保持不变": "Traffic reset failed. The previous counters are unchanged.",
+  "数据库操作失败，原数据保持不变": "Database operation failed. The previous data is unchanged.",
+  "名称需要 1–80 个字符": "The name must contain 1–80 characters.",
+  "请选择 TCP、UDP 或 TCP+UDP": "Select TCP, UDP or TCP+UDP.",
+  "请输入本机 IPv4 或 IPv6 地址": "Enter a local IPv4 or IPv6 address.",
+  "端口范围为 1–65535": "The port must be between 1 and 65535.",
+  "目标必须是单播地址或域名": "The target must be a unicast address or hostname.",
+  "请输入 IP 或域名，不包含协议、路径或端口": "Enter an IP address or hostname without a scheme, path or port.",
+  "启用状态不能为空": "The enabled setting is required.",
+  "请检查此字段": "Please check this field.",
+  "监听端口已占用": "The listen port is already in use.",
+  "该监听端口已被占用": "The listen port is already in use.",
+  "UDP 监听端口已被占用": "The UDP listen port is already in use.",
+  "监听端口已被其他程序占用": "The listen port is in use by another program.",
+  "监听未启动，请重试": "The listener has not started. Please retry.",
+  "监听失败，请检查地址、端口占用和权限": "Listener failed. Check the address, port availability and permissions.",
+  "{protocol} 监听失败，请检查地址、端口占用和权限": "{protocol} listener failed. Check the address, port availability and permissions.",
+  "；更改重叠地址时请先停用规则": " Disable the rule before changing overlapping addresses.",
+} as const;
+
+export type MessageKey = keyof typeof english;
+export type Language = "zh-CN" | "en";
+export const languageStorageKey = "porter.language";
+const currentLanguage = ref<Language>("zh-CN");
+export const language = readonly(currentLanguage);
+
+export function t(key: MessageKey, params: Record<string, string | number> = {}): string {
+  let text: string = currentLanguage.value === "en" ? english[key] : key;
+  if (currentLanguage.value === "en" && params.total === 1 &&
+      (key === "共 {total} 条规则" || key === "显示 {shown} 条，共 {total} 条规则"))
+    text = text.replace(/rules$/, "rule");
+  if (currentLanguage.value === "en" && key === "条" && params.count === 1) text = "rule";
+  return text.replace(/\{(\w+)\}/g, (match, name: string) => String(params[name] ?? match));
+}
+
+export function setLanguage(value: Language): void {
+  currentLanguage.value = value;
+  updateDocumentLanguage();
+  try { localStorage.setItem(languageStorageKey, value); } catch { /* 存储不可用不影响本页切换。 */ }
+}
+
+export function initializeLanguage(): void {
+  let value: Language = "zh-CN";
+  try {
+    const stored = localStorage.getItem(languageStorageKey);
+    if (stored === "zh-CN" || stored === "en") value = stored;
+  } catch { /* 存储不可用时使用默认中文。 */ }
+  currentLanguage.value = value;
+  updateDocumentLanguage();
+}
+
+function updateDocumentLanguage(): void {
+  document.documentElement.lang = currentLanguage.value;
+  document.title = t("Porter · 端口转发");
+  document.querySelector('meta[name="description"]')?.setAttribute("content", t("Porter 端口转发管理面板"));
+}
+
+export function knownMessage(message: string): string | undefined {
+  if (Object.hasOwn(english, message)) return t(message as MessageKey);
+  return undefined;
+}

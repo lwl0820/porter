@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { nextTick, reactive, ref } from "vue";
-import { ApiError, errorMessage } from "../api";
+import { ApiError, errorMessage, fieldErrorMessage } from "../api";
 import { protocols, protocolDetails } from "../types";
 import type { FieldErrors, Rule, RuleInput } from "../types";
 import Modal from "./Modal.vue";
@@ -22,7 +23,7 @@ const form = reactive({
   traffic_enabled: props.rule?.traffic_enabled ?? false,
 });
 const fields = ref<FieldErrors>({});
-const error = ref("");
+const error = ref<unknown>("");
 const busy = ref(false);
 const formElement = ref<HTMLFormElement>();
 
@@ -95,7 +96,7 @@ async function submit(): Promise<void> {
     });
     saved = true;
   } catch (failure) {
-    error.value = errorMessage(failure);
+    error.value = failure;
     if (failure instanceof ApiError) fields.value = failure.fields;
   } finally {
     busy.value = false;
@@ -108,7 +109,7 @@ async function submit(): Promise<void> {
 
 <template>
   <Modal
-    :label="rule ? '编辑规则' : '新增规则'"
+    :label="rule ? t('编辑规则') : t('新增规则')"
     :busy="busy"
     drawer
     @close="emit('close')"
@@ -116,13 +117,13 @@ async function submit(): Promise<void> {
     <form ref="formElement" class="editor" novalidate @submit.prevent="submit">
       <header class="modal-header">
         <div>
-          <span class="eyebrow">转发规则</span>
-          <h2>{{ rule ? "编辑规则" : "新增规则" }}</h2>
+          <span class="eyebrow">{{ t("转发规则") }}</span>
+          <h2>{{ rule ? t("编辑规则") : t("新增规则") }}</h2>
         </div>
         <button
           type="button"
           class="icon-button"
-          aria-label="关闭表单"
+          :aria-label="t('关闭表单')"
           :disabled="busy"
           @click="emit('close')"
         >
@@ -130,28 +131,28 @@ async function submit(): Promise<void> {
         </button>
       </header>
       <div class="editor-body">
-        <p class="editor-intro">将本机端口的流量转发到指定的目标服务。</p>
+        <p class="editor-intro">{{ t("将本机端口的流量转发到指定的目标服务。") }}</p>
         <div v-if="error" role="alert" class="notice error">
-          <Icon name="alert" /><span>{{ error }}</span>
+          <Icon name="alert" /><span>{{ errorMessage(error) }}</span>
         </div>
         <fieldset :disabled="busy">
           <div class="field">
-            <label for="rule-name">规则名称</label
+            <label for="rule-name">{{ t("规则名称") }}</label
             ><input
               id="rule-name"
               v-model="form.name"
               data-autofocus
               autocomplete="off"
-              placeholder="例如：应用服务"
+              :placeholder="t('例如：应用服务')"
               :aria-invalid="Boolean(fields.name)"
               :aria-describedby="fields.name ? 'error-name' : undefined"
             />
             <p v-if="fields.name" id="error-name" class="field-error">
-              {{ fields.name }}
+              {{ fieldErrorMessage("name", fields.name) }}
             </p>
           </div>
           <div class="field">
-            <label id="protocol-label">传输协议</label>
+            <label id="protocol-label">{{ t("传输协议") }}</label>
             <div
               class="protocol-choice"
               role="group"
@@ -170,17 +171,18 @@ async function submit(): Promise<void> {
                   :aria-label="protocolDetails[value].label"
                 />
                 <strong>{{ protocolDetails[value].label }}</strong>
-                <span>{{ protocolDetails[value].description }}</span>
+                <span>{{ t(protocolDetails[value].description) }}</span>
                 <Icon v-if="form.protocol === value" name="check" :size="17" />
               </label>
             </div>
           </div>
+          <p v-if="fields.protocol" class="field-error">{{ fieldErrorMessage("protocol", fields.protocol) }}</p>
           <div class="form-section-label">
-            <span class="step-dot">1</span> 本机监听
+            <span class="step-dot">1</span>{{ t("本机监听") }}
           </div>
           <div class="address-fields">
             <div class="field">
-              <label for="listen-host">监听 IP</label
+              <label for="listen-host">{{ t("监听 IP") }}</label
               ><input
                 id="listen-host"
                 v-model="form.listen_host"
@@ -193,18 +195,18 @@ async function submit(): Promise<void> {
                 "
               />
               <p id="listen-host-hint" class="field-hint">
-                0.0.0.0 监听所有 IPv4 地址；IPv6 使用 ::。
+                {{ t("0.0.0.0 监听所有 IPv4 地址；IPv6 使用 ::。") }}
               </p>
               <p
                 v-if="fields.listen_host"
                 id="error-listen_host"
                 class="field-error"
               >
-                {{ fields.listen_host }}
+                {{ fieldErrorMessage("listen_host", fields.listen_host) }}
               </p>
             </div>
             <div class="field">
-              <label for="listen-port">监听端口</label
+              <label for="listen-port">{{ t("监听端口") }}</label
               ><input
                 id="listen-port"
                 v-model="form.listen_port"
@@ -220,25 +222,25 @@ async function submit(): Promise<void> {
                 id="error-listen_port"
                 class="field-error"
               >
-                {{ fields.listen_port }}
+                {{ fieldErrorMessage("listen_port", fields.listen_port) }}
               </p>
             </div>
           </div>
           <div class="flow-connector">
-            <Icon name="arrow" :size="17" /><span>转发到</span>
+            <Icon name="arrow" :size="17" /><span>{{ t("转发到") }}</span>
           </div>
           <div class="form-section-label">
-            <span class="step-dot">2</span> 目标服务
+            <span class="step-dot">2</span>{{ t("目标服务") }}
           </div>
           <div class="address-fields">
             <div class="field">
-              <label for="target-host">目标主机</label
+              <label for="target-host">{{ t("目标主机") }}</label
               ><input
                 id="target-host"
                 v-model="form.target_host"
                 autocomplete="off"
                 spellcheck="false"
-                placeholder="10.0.0.2 或 example.com"
+                :placeholder="t('10.0.0.2 或 example.com')"
                 :aria-invalid="Boolean(fields.target_host)"
                 :aria-describedby="
                   fields.target_host ? 'error-target_host' : undefined
@@ -249,11 +251,11 @@ async function submit(): Promise<void> {
                 id="error-target_host"
                 class="field-error"
               >
-                {{ fields.target_host }}
+                {{ fieldErrorMessage("target_host", fields.target_host) }}
               </p>
             </div>
             <div class="field">
-              <label for="target-port">目标端口</label
+              <label for="target-port">{{ t("目标端口") }}</label
               ><input
                 id="target-port"
                 v-model="form.target_port"
@@ -269,24 +271,26 @@ async function submit(): Promise<void> {
                 id="error-target_port"
                 class="field-error"
               >
-                {{ fields.target_port }}
+                {{ fieldErrorMessage("target_port", fields.target_port) }}
               </p>
             </div>
           </div>
           <label class="enable-field">
-            <span><strong>流量统计</strong><span>记录上下行流量与速度</span></span>
-            <input v-model="form.traffic_enabled" type="checkbox" class="toggle-input" aria-label="流量统计" />
+            <span><strong>{{ t("流量统计") }}</strong><span>{{ t("记录上下行流量与速度") }}</span></span>
+            <input v-model="form.traffic_enabled" type="checkbox" class="toggle-input" :aria-label="t('流量统计')" />
           </label>
+          <p v-if="fields.traffic_enabled" class="field-error">{{ fieldErrorMessage("traffic_enabled", fields.traffic_enabled) }}</p>
           <label class="enable-field"
             ><span
-              ><strong>启用规则</strong
-              ><span>保存后立即开始监听和转发</span></span
+              ><strong>{{ t("启用规则") }}</strong
+              ><span>{{ t("保存后立即开始监听和转发") }}</span></span
             ><input v-model="form.enabled" type="checkbox" class="toggle-input"
           /></label>
+          <p v-if="fields.enabled" class="field-error">{{ fieldErrorMessage("enabled", fields.enabled) }}</p>
         </fieldset>
         <div v-if="rule" class="notice subtle">
           <Icon name="alert" :size="18" /><span
-            >修改转发参数会断开该规则的现有会话。仅修改名称或流量统计不会影响转发。</span
+            >{{ t("修改转发参数会断开该规则的现有会话。仅修改名称或流量统计不会影响转发。") }}</span
           >
         </div>
       </div>
@@ -297,14 +301,14 @@ async function submit(): Promise<void> {
           :disabled="busy"
           @click="emit('close')"
         >
-          取消
+          {{ t("取消") }}
 </button
         ><button type="submit" class="button primary" :disabled="busy">
           <span v-if="busy" class="spinner small" /><Icon
             v-else
             name="check"
             :size="18"
-          />{{ busy ? "正在保存…" : "保存规则" }}
+          />{{ busy ? t("正在保存…") : t("保存规则") }}
         </button>
       </footer>
     </form>

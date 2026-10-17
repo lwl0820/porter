@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import type { Rule } from "../types";
 import Icon from "./Icon.vue";
 
@@ -18,8 +19,8 @@ defineEmits<{
       type="button"
       class="icon-button retry-button"
       :disabled="busy"
-      :aria-label="`重试 ${rule.name}`"
-      title="重试"
+      :aria-label="t('重试 {name}', { name: rule.name })"
+      :title="t('重试')"
       @click="$emit('retry', rule)"
     >
       <Icon name="refresh" :size="17" />
@@ -29,9 +30,9 @@ defineEmits<{
       class="switch"
       role="switch"
       :aria-checked="rule.enabled"
-      :aria-label="`${rule.enabled ? '停用' : '启用'} ${rule.name}`"
+      :aria-label="t(rule.enabled ? '停用 {name}' : '启用 {name}', { name: rule.name })"
       :disabled="busy"
-      :title="rule.enabled ? '停用规则，会断开现有会话' : '启用规则'"
+      :title="rule.enabled ? t('停用规则，会断开现有会话') : t('启用规则')"
       @click="$emit('toggle', rule)"
     >
       <span />
@@ -41,8 +42,8 @@ defineEmits<{
       type="button"
       class="icon-button"
       :disabled="busy"
-      :aria-label="`编辑 ${rule.name}`"
-      title="编辑"
+      :aria-label="t('编辑 {name}', { name: rule.name })"
+      :title="t('编辑')"
       @click="$emit('edit', rule)"
     >
       <Icon name="edit" :size="17" />
@@ -51,8 +52,8 @@ defineEmits<{
       type="button"
       class="icon-button danger-hover"
       :disabled="busy"
-      :aria-label="`删除 ${rule.name}`"
-      title="删除"
+      :aria-label="t('删除 {name}', { name: rule.name })"
+      :title="t('删除')"
       @click="$emit('remove', rule)"
     >
       <Icon name="trash" :size="17" />

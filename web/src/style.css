@@ -2047,3 +2047,93 @@ td:last-child {
 .desktop-table th:nth-child(7) { width: 22%; }
 .desktop-table th:last-child { width: 15%; }
 .rule-card > .rule-traffic { padding: 16px 0; border-top: 1px solid #edf0f5; }
+
+/* 语言入口在窄屏和原生模态框内保持可操作。 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.language-switcher {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.language-switcher select {
+  width: auto;
+  min-height: 36px;
+  padding: 7px 28px 7px 10px;
+  font-size: 12px;
+}
+.standalone-language {
+  position: absolute;
+  top: 22px;
+  right: 24px;
+}
+.startup-screen,
+.login-form-area {
+  position: relative;
+}
+.modal-language {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 24px 0;
+}
+html[lang="en"] .story-content h1 {
+  font-size: clamp(30px, 3.1vw, 50px);
+}
+html[lang="en"] .summary-body small {
+  font-size: 10px;
+}
+@media (max-width: 560px) {
+  .account-avatar,
+  .account-name {
+    display: none;
+  }
+  .topbar-inner {
+    gap: 8px;
+  }
+  .language-switcher select {
+    padding-left: 8px;
+  }
+  .modal-language {
+    padding: 10px 16px 0;
+  }
+  .traffic-heading {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  html[lang="en"] .page-heading {
+    align-items: flex-start;
+  }
+  html[lang="en"] .page-heading > .button {
+    white-space: normal;
+    flex-shrink: 0;
+  }
+  html[lang="en"] .summary-body > span {
+    font-size: 11px;
+  }
+  html[lang="en"] .enable-field > span {
+    min-width: 0;
+  }
+}
+.modal.drawer .modal-language {
+  position: absolute;
+  top: 24px;
+  right: 72px;
+  padding: 0;
+}
+@media (max-width: 560px) {
+  .modal.drawer .modal-language {
+    top: 20px;
+    right: 60px;
+  }
+  html[lang="en"] .summary-body > span {
+    white-space: normal;
+  }
+}

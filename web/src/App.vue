@@ -1,6 +1,10 @@
 <script setup lang="ts">
+import { initializeLanguage, language, t, type MessageKey } from "./i18n";
+import LanguageSwitcher from "./components/LanguageSwitcher.vue";
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
-import { api, ApiError, errorMessage, onUnauthorized, setSession } from "./api";
+import {
+  api, ApiError, errorMessage, ruleErrorMessage, onUnauthorized, setSession,
+} from "./api";
 import {
   address,
   matchesProtocol,
@@ -19,20 +23,23 @@ import RuleActions from "./components/RuleActions.vue";
 import RuleTraffic from "./components/RuleTraffic.vue";
 import RuleEditor from "./components/RuleEditor.vue";
 
+initializeLanguage();
+
 const session = ref<Session>();
 const booting = ref(true);
-const bootError = ref("");
+const bootError = ref<unknown>("");
 const username = ref("");
 const password = ref("");
-const loginError = ref("");
+const loginError = ref<unknown>("");
 const loggingIn = ref(false);
 const loginInput = ref<HTMLInputElement>();
+const passwordInput = ref<HTMLInputElement>();
 const rules = ref<Rule[]>([]);
 const loaded = ref(false);
 const loading = ref(false);
-const listError = ref("");
-const actionError = ref("");
-const announcement = ref("");
+const listError = ref<unknown>("");
+const actionError = ref<unknown>("");
+const announcement = ref<MessageKey | "">("");
 const search = ref("");
 const searchInput = ref<HTMLInputElement>();
 const protocol = ref<Protocol | "">("");
@@ -42,8 +49,8 @@ const editingRule = ref<Rule>();
 const editorBusy = ref(false);
 const deletingRule = ref<Rule>();
 const resettingRule = ref<Rule>();
-const resetError = ref("");
-const deleteError = ref("");
+const resetError = ref<unknown>("");
+const deleteError = ref<unknown>("");
 const busy = ref("");
 const lastRefresh = ref<Date>();
 let requestController: AbortController | undefined;
@@ -75,12 +82,12 @@ const hasFilters = computed(() =>
 );
 const refreshingText = computed(
   () =>
-    lastRefresh.value?.toLocaleTimeString("zh-CN", { hour12: false }) ??
-    "尚未同步",
+    lastRefresh.value?.toLocaleTimeString(language.value, { hour12: false }) ??
+    t("尚未同步"),
 );
 const mutationBusy = computed(() => Boolean(busy.value) || editorBusy.value);
 
-function notify(message: string): void {
+function notify(message: MessageKey): void {
   announcement.value = message;
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
@@ -122,7 +129,7 @@ async function loadRules(): Promise<void> {
     lastRefresh.value = new Date();
   } catch (error) {
     if (version !== requestVersion || !session.value) return;
-    listError.value = errorMessage(error);
+    listError.value = error;
   } finally {
     if (version === requestVersion) loading.value = false;
   }
@@ -138,7 +145,7 @@ async function initialize(): Promise<void> {
     await loadRules();
   } catch (error) {
     if (!(error instanceof ApiError && error.status === 401))
-      bootError.value = errorMessage(error);
+      bootError.value = error;
     loginError.value = "";
   } finally {
     booting.value = false;
@@ -149,6 +156,13 @@ async function initialize(): Promise<void> {
 async function login(): Promise<void> {
   if (loggingIn.value) return;
   loginError.value = "";
+  if (!username.value.trim() || !password.value) {
+    const missingUsername = !username.value.trim();
+    loginError.value = missingUsername ? "请输入管理员用户名" : "请输入密码";
+    await nextTick();
+    (missingUsername ? loginInput.value : passwordInput.value)?.focus();
+    return;
+  }
   loggingIn.value = true;
   try {
     const result = await api.login(username.value.trim(), password.value);
@@ -158,7 +172,7 @@ async function login(): Promise<void> {
     password.value = "";
     await loadRules();
   } catch (error) {
-    loginError.value = errorMessage(error);
+    loginError.value = error;
   } finally {
     loggingIn.value = false;
   }
@@ -173,7 +187,7 @@ async function logout(): Promise<void> {
     loginError.value = "";
     username.value = "";
   } catch (error) {
-    if (session.value) actionError.value = errorMessage(error);
+    if (session.value) actionError.value = error;
   } finally {
     busy.value = "";
   }
@@ -232,7 +246,7 @@ async function mutate(
           : "规则已停用，现有会话已断开",
     );
   } catch (error) {
-    if (session.value) actionError.value = errorMessage(error);
+    if (session.value) actionError.value = error;
   } finally {
     busy.value = "";
   }
@@ -255,7 +269,7 @@ async function resetTraffic(): Promise<void> {
     resettingRule.value = undefined;
     notify("流量已重置");
   } catch (error) {
-    if (session.value) resetError.value = errorMessage(error);
+    if (session.value) resetError.value = error;
   } finally {
     busy.value = "";
   }
@@ -278,7 +292,7 @@ async function remove(): Promise<void> {
     deletingRule.value = undefined;
     notify("规则已删除");
   } catch (error) {
-    deleteError.value = errorMessage(error);
+    deleteError.value = error;
   } finally {
     busy.value = "";
   }
@@ -339,30 +353,31 @@ onUnmounted(() => {
 
 <template>
   <div v-if="booting || bootError" class="startup-screen">
+    <LanguageSwitcher class="standalone-language" />
     <div class="brand-mark"><Icon name="arrows" :size="28" /></div>
     <template v-if="booting">
       <span class="spinner" />
-      <p>正在连接 Porter…</p>
+      <p>{{ t("正在连接 Porter…") }}</p>
     </template>
     <template v-else>
-      <p role="alert">{{ bootError }}</p>
-      <button class="button primary" @click="initialize">重新连接</button>
+      <p role="alert">{{ errorMessage(bootError) }}</p>
+      <button class="button primary" @click="initialize">{{ t("重新连接") }}</button>
     </template>
   </div>
 
   <main v-else-if="!session" class="login-page">
-    <section class="login-story" aria-label="Porter 介绍">
-      <a class="brand" href="/" aria-label="Porter 首页"
+    <section class="login-story" :aria-label="t('Porter 介绍')">
+      <a class="brand" href="/" :aria-label="t('Porter 首页')"
         ><span class="brand-mark"><Icon name="arrows" :size="25" /></span
         ><span>Porter<span class="brand-period">.</span></span></a
       >
       <div class="story-content">
-        <span class="eyebrow">让连接井然有序</span>
-        <h1>每一个端口，<br />都有清晰的去向。</h1>
-        <p>在一个面板中管理 TCP 与 UDP 转发，<br />让你的服务轻松连接。</p>
+        <span class="eyebrow">{{ t("让连接井然有序") }}</span>
+        <h1>{{ t("每一个端口，") }}<br />{{ t("都有清晰的去向。") }}</h1>
+        <p>{{ t("在一个面板中管理 TCP 与 UDP 转发，") }}<br />{{ t("让你的服务轻松连接。") }}</p>
         <div class="network-art" aria-hidden="true">
           <div class="art-endpoint">
-            <Icon name="network" :size="28" /><span>本机端口</span>
+            <Icon name="network" :size="28" /><span>{{ t("本机端口") }}</span>
           </div>
           <div class="art-link">
             <i /><i /><i /><Icon name="arrow" :size="24" />
@@ -372,44 +387,46 @@ onUnmounted(() => {
             <i /><i /><i /><Icon name="arrow" :size="24" />
           </div>
           <div class="art-endpoint">
-            <Icon name="layers" :size="28" /><span>目标服务</span>
+            <Icon name="layers" :size="28" /><span>{{ t("目标服务") }}</span>
           </div>
         </div>
       </div>
-      <span class="story-footer">简单连接 · 轻松掌控</span>
+      <span class="story-footer">{{ t("简单连接 · 轻松掌控") }}</span>
     </section>
     <section class="login-form-area">
+      <LanguageSwitcher class="standalone-language" />
       <div class="login-form-wrap">
         <span class="login-mobile-brand"
           >Porter<span class="brand-period">.</span></span
         >
         <div class="login-lock"><Icon name="lock" :size="25" /></div>
-        <h2>欢迎回来</h2>
-        <p class="login-description">登录以管理你的端口转发规则</p>
-        <form @submit.prevent="login">
+        <h2>{{ t("欢迎回来") }}</h2>
+        <p class="login-description">{{ t("登录以管理你的端口转发规则") }}</p>
+        <form novalidate @submit.prevent="login">
           <div v-if="loginError" role="alert" class="notice error">
-            <Icon name="alert" :size="18" /><span>{{ loginError }}</span>
+            <Icon name="alert" :size="18" /><span>{{ errorMessage(loginError) }}</span>
           </div>
           <div class="field">
-            <label for="username">用户名</label
+            <label for="username">{{ t("用户名") }}</label
             ><input
               id="username"
               ref="loginInput"
               v-model="username"
               autocomplete="username"
-              placeholder="请输入管理员用户名"
+              :placeholder="t('请输入管理员用户名')"
               required
               :disabled="loggingIn"
             />
           </div>
           <div class="field">
-            <label for="password">密码</label
+            <label for="password">{{ t("密码") }}</label
             ><input
               id="password"
+              ref="passwordInput"
               v-model="password"
               type="password"
               autocomplete="current-password"
-              placeholder="请输入密码"
+              :placeholder="t('请输入密码')"
               required
               :disabled="loggingIn"
             />
@@ -420,39 +437,40 @@ onUnmounted(() => {
             :disabled="loggingIn"
           >
             <span v-if="loggingIn" class="spinner small" />{{
-              loggingIn ? "正在登录…" : "登录面板"
+              loggingIn ? t("正在登录…") : t("登录面板")
             }}<Icon v-if="!loggingIn" name="arrow" :size="18" />
           </button>
         </form>
         <div class="login-security">
-          <Icon name="shield" :size="16" /><span>仅限授权管理员访问</span>
+          <Icon name="shield" :size="16" /><span>{{ t("仅限授权管理员访问") }}</span>
         </div>
       </div>
-      <span class="login-footer">Porter · 端口转发管理</span>
+      <span class="login-footer">{{ t("Porter · 端口转发管理") }}</span>
     </section>
   </main>
 
   <div v-else class="app-shell">
-    <a class="skip-link" href="#main-content">跳转到主内容</a>
+    <a class="skip-link" href="#main-content">{{ t("跳转到主内容") }}</a>
     <header class="topbar">
       <div class="topbar-inner">
-        <a class="brand" href="/" aria-label="Porter 首页"
+        <a class="brand" href="/" :aria-label="t('Porter 首页')"
           ><span class="brand-mark"><Icon name="arrows" :size="24" /></span
           ><span>Porter<span class="brand-period">.</span></span></a
         ><span class="header-divider" /><span class="topbar-section"
-          ><Icon name="network" :size="17" />端口转发</span
+          ><Icon name="network" :size="17" />{{ t("端口转发") }}</span
         >
         <div class="account">
+          <LanguageSwitcher />
           <span class="account-avatar"><Icon name="user" :size="17" /></span
           ><span class="account-name">{{ session.username }}</span
           ><button
             type="button"
             class="logout-button"
-            aria-label="退出登录"
+            :aria-label="t('退出登录')"
             :disabled="mutationBusy"
             @click="logout"
           >
-            <Icon name="logout" :size="17" /><span>退出登录</span>
+            <Icon name="logout" :size="17" /><span>{{ t("退出登录") }}</span>
           </button>
         </div>
       </div>
@@ -460,9 +478,9 @@ onUnmounted(() => {
     <main id="main-content" class="dashboard" tabindex="-1">
       <div class="page-heading">
         <div>
-          <div class="eyebrow">网络管理</div>
-          <h1>端口转发</h1>
-          <p>为你的服务建立连接，统一管理每一条转发规则。</p>
+          <div class="eyebrow">{{ t("网络管理") }}</div>
+          <h1>{{ t("端口转发") }}</h1>
+          <p>{{ t("为你的服务建立连接，统一管理每一条转发规则。") }}</p>
         </div>
         <button
           type="button"
@@ -470,10 +488,10 @@ onUnmounted(() => {
           :disabled="mutationBusy"
           @click="openEditor()"
         >
-          <Icon name="plus" :size="19" />新增规则
+          <Icon name="plus" :size="19" />{{ t("新增规则") }}
         </button>
       </div>
-      <section class="summary-grid" aria-label="规则概览">
+      <section class="summary-grid" :aria-label="t('规则概览')">
         <button
           class="summary-card"
           :class="{ active: status === '' }"
@@ -483,9 +501,9 @@ onUnmounted(() => {
           <span class="summary-icon blue"
             ><Icon name="layers" :size="22" /></span
           ><span class="summary-body"
-            ><span>全部规则</span
+            ><span>{{ t("全部规则") }}</span
             ><strong
-              >{{ loaded ? counts.all : "—" }}<small>条</small></strong
+              >{{ loaded ? counts.all : "—" }}<small>{{ t("条", { count: counts.all }) }}</small></strong
             ></span
           ><span class="summary-accent blue" />
         </button>
@@ -498,9 +516,9 @@ onUnmounted(() => {
           <span class="summary-icon teal"
             ><Icon name="activity" :size="22" /></span
           ><span class="summary-body"
-            ><span>运行中</span
+            ><span>{{ t("运行中") }}</span
             ><strong
-              >{{ loaded ? counts.running : "—" }}<small>条</small></strong
+              >{{ loaded ? counts.running : "—" }}<small>{{ t("条", { count: counts.running }) }}</small></strong
             ></span
           ><span class="summary-accent teal" />
         </button>
@@ -512,9 +530,9 @@ onUnmounted(() => {
         >
           <span class="summary-icon gray"><Icon name="pause" :size="22" /></span
           ><span class="summary-body"
-            ><span>已停用</span
+            ><span>{{ t("已停用") }}</span
             ><strong
-              >{{ loaded ? counts.disabled : "—" }}<small>条</small></strong
+              >{{ loaded ? counts.disabled : "—" }}<small>{{ t("条", { count: counts.disabled }) }}</small></strong
             ></span
           ><span class="summary-accent gray" />
         </button>
@@ -527,18 +545,18 @@ onUnmounted(() => {
           <span class="summary-icon amber"
             ><Icon name="alert" :size="22" /></span
           ><span class="summary-body"
-            ><span>需要关注</span
+            ><span>{{ t("需要关注") }}</span
             ><strong
-              >{{ loaded ? counts.error : "—" }}<small>条</small></strong
+              >{{ loaded ? counts.error : "—" }}<small>{{ t("条", { count: counts.error }) }}</small></strong
             ></span
           ><span class="summary-accent amber" />
         </button>
       </section>
       <div v-if="actionError" role="alert" class="notice error dismissible">
-        <Icon name="alert" /><span>{{ actionError }}</span
+        <Icon name="alert" /><span>{{ errorMessage(actionError) }}</span
         ><button
           class="icon-button"
-          aria-label="关闭错误提示"
+          :aria-label="t('关闭错误提示')"
           @click="actionError = ''"
         >
           <Icon name="close" :size="17" />
@@ -546,17 +564,17 @@ onUnmounted(() => {
       </div>
       <section
         class="rules-panel"
-        aria-label="转发规则列表"
+        :aria-label="t('转发规则列表')"
         :aria-busy="loading"
       >
         <div class="panel-heading">
           <h2>
-            转发规则<span class="count-badge">{{
+            {{ t("转发规则") }}<span class="count-badge">{{
               loaded ? counts.all : "—"
             }}</span>
           </h2>
           <span class="sync-indicator"
-            ><span class="live-dot" />每 5 秒同步</span
+            ><span class="live-dot" />{{ t("每 5 秒同步") }}</span
           >
         </div>
         <div class="toolbar">
@@ -564,27 +582,27 @@ onUnmounted(() => {
             <Icon name="search" :size="18" /><input
               ref="searchInput"
               v-model="search"
-              aria-label="搜索规则"
-              placeholder="搜索规则名称、IP 或域名…"
+              :aria-label="t('搜索规则')"
+              :placeholder="t('搜索规则名称、IP 或域名…')"
               type="search"
             /><kbd>/</kbd>
           </div>
           <div class="filters">
-            <select v-model="protocol" aria-label="按协议筛选">
-              <option value="">全部协议</option>
+            <select v-model="protocol" :aria-label="t('按协议筛选')">
+              <option value="">{{ t("全部协议") }}</option>
               <option value="tcp">TCP</option>
               <option value="udp">UDP</option>
               <option value="tcp+udp">TCP+UDP</option>
 </select
-            ><select v-model="status" aria-label="按状态筛选">
-              <option value="">全部状态</option>
-              <option value="running">运行中</option>
-              <option value="disabled">已停用</option>
-              <option value="error">错误</option>
+            ><select v-model="status" :aria-label="t('按状态筛选')">
+              <option value="">{{ t("全部状态") }}</option>
+              <option value="running">{{ t("运行中") }}</option>
+              <option value="disabled">{{ t("已停用") }}</option>
+              <option value="error">{{ t("错误") }}</option>
 </select
             ><button
               class="button refresh-button"
-              aria-label="刷新规则"
+              :aria-label="t('刷新规则')"
               :disabled="loading || mutationBusy"
               @click="loadRules"
             >
@@ -592,34 +610,34 @@ onUnmounted(() => {
                 name="refresh"
                 :size="17"
                 :class="{ spinning: loading }"
-              /><span>刷新</span>
+              /><span>{{ t("刷新") }}</span>
             </button>
           </div>
         </div>
         <div v-if="listError" role="alert" class="notice error list-notice">
           <Icon name="alert" /><span
-            >{{ listError
-            }}{{ loaded ? " 当前保留上次同步的数据。" : "" }}</span
+            >{{ errorMessage(listError)
+            }}{{ loaded ? t(" 当前保留上次同步的数据。") : "" }}</span
           ><button
             class="text-button"
             :disabled="loading || mutationBusy"
             @click="loadRules"
           >
-            重试
+            {{ t("重试") }}
           </button>
         </div>
         <div v-if="!loaded" class="empty-state">
           <template v-if="loading">
             <span class="spinner" />
-            <h3>正在加载规则</h3>
-            <p>稍等片刻，正在同步你的转发配置。</p>
+            <h3>{{ t("正在加载规则") }}</h3>
+            <p>{{ t("稍等片刻，正在同步你的转发配置。") }}</p>
 </template
           ><template v-else>
             <span class="empty-icon"><Icon name="alert" :size="29" /></span>
-            <h3>暂时无法获取规则</h3>
-            <p>请检查网络连接，然后重新尝试。</p>
+            <h3>{{ t("暂时无法获取规则") }}</h3>
+            <p>{{ t("请检查网络连接，然后重新尝试。") }}</p>
             <button class="button secondary" @click="loadRules">
-              重新加载
+              {{ t("重新加载") }}
             </button>
           </template>
         </div>
@@ -628,14 +646,14 @@ onUnmounted(() => {
             <table>
               <thead>
                 <tr>
-                  <th scope="col">规则名称</th>
-                  <th scope="col">协议</th>
-                  <th scope="col">监听地址</th>
+                  <th scope="col">{{ t("规则名称") }}</th>
+                  <th scope="col">{{ t("协议") }}</th>
+                  <th scope="col">{{ t("监听地址") }}</th>
                   <th scope="col" class="direction-cell" />
-                  <th scope="col">转发目标</th>
-                  <th scope="col">运行状态</th>
-                  <th scope="col">速度与流量</th>
-                  <th scope="col" class="operation-heading">操作</th>
+                  <th scope="col">{{ t("转发目标") }}</th>
+                  <th scope="col">{{ t("运行状态") }}</th>
+                  <th scope="col">{{ t("速度与流量") }}</th>
+                  <th scope="col" class="operation-heading">{{ t("操作") }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -677,15 +695,15 @@ onUnmounted(() => {
                       :class="rule.status"
                       :title="
                         rule.status === 'running'
-                          ? '本机监听正常，不代表目标服务始终可达'
+                          ? t('本机监听正常，不代表目标服务始终可达')
                           : undefined
                       "
-                      ><i />{{ statusLabels[rule.status] }}</span
+                      ><i />{{ t(statusLabels[rule.status]) }}</span
                     ><span
                       v-if="rule.last_error && rule.status === 'error'"
                       class="rule-error"
-                      :title="rule.last_error"
-                      >{{ rule.last_error }}</span
+                      :title="ruleErrorMessage(rule)"
+                      >{{ ruleErrorMessage(rule) }}</span
                     >
                   </td>
                   <td class="traffic-cell"><RuleTraffic :rule="rule" :busy="mutationBusy" @reset="confirmReset" /></td>
@@ -727,14 +745,14 @@ onUnmounted(() => {
               </div>
               <div class="mobile-route">
                 <div>
-                  <span>监听地址</span
+                  <span>{{ t("监听地址") }}</span
                   ><code>{{
                     address(rule.listen_host, rule.listen_port)
                   }}</code>
                 </div>
                 <Icon name="arrow" :size="18" />
                 <div>
-                  <span>转发目标</span
+                  <span>{{ t("转发目标") }}</span
                   ><code>{{
                     address(rule.target_host, rule.target_port)
                   }}</code>
@@ -744,12 +762,12 @@ onUnmounted(() => {
                 v-if="rule.last_error && rule.status === 'error'"
                 class="mobile-rule-error"
               >
-                {{ rule.last_error }}
+                {{ ruleErrorMessage(rule) }}
               </p>
               <RuleTraffic :rule="rule" :busy="mutationBusy" @reset="confirmReset" />
               <div class="rule-card-footer">
                 <span class="status-badge" :class="rule.status"
-                  ><i />{{ statusLabels[rule.status] }}</span
+                  ><i />{{ t(statusLabels[rule.status]) }}</span
                 ><RuleActions
                   :rule="rule"
                   :busy="mutationBusy"
@@ -766,12 +784,12 @@ onUnmounted(() => {
           <span class="empty-icon"
             ><Icon :name="hasFilters ? 'search' : 'arrows'" :size="32"
           /></span>
-          <h3>{{ hasFilters ? "没有找到匹配的规则" : "从第一条规则开始" }}</h3>
+          <h3>{{ hasFilters ? t("没有找到匹配的规则") : t("从第一条规则开始") }}</h3>
           <p>
             {{
               hasFilters
-                ? "试试其他关键词，或调整筛选条件。"
-                : "添加本机监听端口和目标地址，即可开始转发。"
+                ? t("试试其他关键词，或调整筛选条件。")
+                : t("添加本机监听端口和目标地址，即可开始转发。")
             }}
           </p>
           <button
@@ -779,7 +797,7 @@ onUnmounted(() => {
             class="button secondary"
             @click="clearFilters"
           >
-            清除筛选
+            {{ t("清除筛选") }}
 </button
           ><button
             v-else
@@ -787,31 +805,31 @@ onUnmounted(() => {
             :disabled="mutationBusy"
             @click="openEditor()"
           >
-            <Icon name="plus" :size="18" />新增规则
+            <Icon name="plus" :size="18" />{{ t("新增规则") }}
           </button>
         </div>
         <footer class="panel-footer">
           <span>{{
             hasFilters
-              ? `显示 ${filteredRules.length} 条，共 ${counts.all} 条规则`
-              : `共 ${loaded ? counts.all : "—"} 条规则`
+              ? t("显示 {shown} 条，共 {total} 条规则", { shown: filteredRules.length, total: counts.all })
+              : t("共 {total} 条规则", { total: loaded ? counts.all : "—" })
           }}</span
-          ><span>最后同步 {{ refreshingText }}</span>
+          ><span>{{ t("最后同步 {time}", { time: refreshingText }) }}</span>
         </footer>
       </section>
       <div class="dashboard-note">
         <Icon name="shield" :size="16" />
-        <p>“运行中”表示本机监听正常。停用规则会立即断开现有会话。</p>
+        <p>{{ t("“运行中”表示本机监听正常。停用规则会立即断开现有会话。") }}</p>
       </div>
     </main>
     <footer class="app-footer">
       <span>Porter<span class="brand-period">.</span></span
-      ><span>让连接井然有序</span><span>TCP / UDP</span>
+      ><span>{{ t("让连接井然有序") }}</span><span>TCP / UDP</span>
     </footer>
     <Transition name="toast">
       <div v-if="announcement" role="status" class="toast-notice">
         <span class="toast-icon"><Icon name="check" :size="17" /></span
-        >{{ announcement }}
+        >{{ t(announcement) }}
       </div>
     </Transition>
     <RuleEditor
@@ -821,29 +839,29 @@ onUnmounted(() => {
       @close="editorOpen = false"
       @busy="editorBusy = $event"
     />
-    <Modal v-if="resettingRule" label="重置流量" :busy="Boolean(busy)" @close="resettingRule = undefined">
+    <Modal v-if="resettingRule" :label="t('重置流量')" :busy="Boolean(busy)" @close="resettingRule = undefined">
       <div class="delete-dialog">
-        <h2>重置流量？</h2>
-        <p>确定清空 <strong>{{ resettingRule.name }}</strong> 的上下行累计流量吗？</p>
-        <p class="delete-warning">此操作无法撤销，不会影响转发连接或统计开关。</p>
-        <div v-if="resetError" role="alert" class="notice error">{{ resetError }}</div>
+        <h2>{{ t("重置流量？") }}</h2>
+        <p>{{ t("确定清空 {name} 的上下行累计流量吗？", { name: resettingRule.name }) }}</p>
+        <p class="delete-warning">{{ t("此操作无法撤销，不会影响转发连接或统计开关。") }}</p>
+        <div v-if="resetError" role="alert" class="notice error">{{ errorMessage(resetError) }}</div>
         <div class="delete-actions">
-          <button class="button secondary" data-autofocus :disabled="Boolean(busy)" @click="resettingRule = undefined">取消</button>
-          <button class="button primary" :disabled="Boolean(busy)" @click="resetTraffic">{{ busy ? "正在重置…" : "确认重置" }}</button>
+          <button class="button secondary" data-autofocus :disabled="Boolean(busy)" @click="resettingRule = undefined">{{ t("取消") }}</button>
+          <button class="button primary" :disabled="Boolean(busy)" @click="resetTraffic">{{ busy ? t("正在重置…") : t("确认重置") }}</button>
         </div>
       </div>
     </Modal>
     <Modal
       v-if="deletingRule"
-      label="删除规则"
+      :label="t('删除规则')"
       :busy="Boolean(busy)"
       @close="deletingRule = undefined"
     >
       <div class="delete-dialog">
         <span class="delete-icon"><Icon name="trash" :size="26" /></span>
-        <h2>删除这条规则？</h2>
+        <h2>{{ t("删除这条规则？") }}</h2>
         <p>
-          确定删除 <strong>{{ deletingRule.name }}</strong> 吗？
+          {{ t("确定删除 {name} 吗？", { name: deletingRule.name }) }}
         </p>
         <code
           >{{ address(deletingRule.listen_host, deletingRule.listen_port) }} →
@@ -852,10 +870,10 @@ onUnmounted(() => {
           }}</code
         >
         <p class="delete-warning">
-          转发将立即停止，现有会话会被断开。此操作无法撤销。
+          {{ t("转发将立即停止，现有会话会被断开。此操作无法撤销。") }}
         </p>
         <div v-if="deleteError" role="alert" class="notice error">
-          {{ deleteError }}
+          {{ errorMessage(deleteError) }}
         </div>
         <div class="delete-actions">
           <button
@@ -864,7 +882,7 @@ onUnmounted(() => {
             :disabled="Boolean(busy)"
             @click="deletingRule = undefined"
           >
-            保留规则
+            {{ t("保留规则") }}
 </button
           ><button
             class="button danger"
@@ -872,7 +890,7 @@ onUnmounted(() => {
             @click="remove"
           >
             <span v-if="busy" class="spinner small" />{{
-              busy ? "正在删除…" : "确认删除"
+              busy ? t("正在删除…") : t("确认删除")
             }}
           </button>
         </div>

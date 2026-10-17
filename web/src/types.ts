@@ -1,3 +1,5 @@
+import type { MessageKey } from "./i18n";
+
 export const protocols = ["tcp", "udp", "tcp+udp"] as const;
 export type Protocol = (typeof protocols)[number];
 
@@ -5,7 +7,7 @@ export const protocolDetails: Record<
   Protocol,
   {
     label: string;
-    description: string;
+    description: MessageKey;
     className: string;
     icon: string;
   }
@@ -83,7 +85,7 @@ export function address(host: string, port: number): string {
   return `${host.includes(":") ? `[${host}]` : host}:${port}`;
 }
 
-export const statusLabels: Record<RuleStatus, string> = {
+export const statusLabels: Record<RuleStatus, MessageKey> = {
   running: "运行中",
   disabled: "已停用",
   error: "错误",

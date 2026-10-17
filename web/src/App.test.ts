@@ -2,6 +2,7 @@ import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App.vue";
 import { setSession } from "./api";
+import { languageStorageKey, setLanguage } from "./i18n";
 import type { Rule, RuleInput } from "./types";
 
 const example: Rule = {
@@ -26,6 +27,8 @@ let authenticated: boolean;
 let calls: { path: string; options: RequestInit }[];
 let failurePath = "";
 let failureStatus = 0;
+let failureCode = "validation";
+let failureMessage = "该监听端口已被占用";
 let failureFields: Record<string, string> = {};
 
 function response(value: unknown, status = 200): Response {
@@ -54,6 +57,11 @@ async function fillRule(name = "DNS 入口"): Promise<void> {
 }
 
 beforeEach(() => {
+  localStorage.clear();
+  setLanguage("zh-CN");
+  localStorage.clear();
+  failureCode = "validation";
+  failureMessage = "该监听端口已被占用";
   records = [{ ...example }];
   authenticated = true;
   calls = [];
@@ -75,8 +83,8 @@ beforeEach(() => {
         return response(
           {
             error: {
-              code: "validation",
-              message: "该监听端口已被占用",
+              code: failureCode,
+              message: failureMessage,
               fields: failureFields,
             },
           },
@@ -154,6 +162,7 @@ afterEach(() => {
   wrapper?.unmount();
   wrapper = undefined;
   document.body.innerHTML = "";
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -684,5 +693,168 @@ describe("流量统计", () => {
     await flushPromises();
     const update = calls.find((call) => call.options.method === "PUT")!;
     expect(new Headers(update.options.headers).get("If-Match")).toBe('"2"');
+  });
+});
+
+
+describe("中英文界面", () => {
+  it("默认中文，切换立即同步文档与规则，刷新并退出登录仍记住偏好", async () => {
+    await start();
+    expect(document.documentElement.lang).toBe("zh-CN");
+    expect(document.title).toBe("Porter · 端口转发");
+    const callsBefore = calls.length;
+    await wrapper!.get(".language-switcher select").setValue("en");
+    expect(document.documentElement.lang).toBe("en");
+    expect(document.title).toBe("Porter · Port forwarding");
+    expect(localStorage.getItem(languageStorageKey)).toBe("en");
+    expect(wrapper!.get("h1").text()).toBe("Port forwarding");
+    expect(wrapper!.get(".desktop-table").text()).toContain("应用入口");
+    expect(wrapper!.find('[aria-label="Sign out"]').exists()).toBe(true);
+    expect(wrapper!.find('[aria-label="Refresh rules"]').exists()).toBe(true);
+    expect(calls).toHaveLength(callsBefore);
+    wrapper!.unmount();
+    await start();
+    expect(wrapper!.get(".language-switcher select").element).toHaveProperty("value", "en");
+    await button("Sign out").trigger("click");
+    await flushPromises();
+    expect(wrapper!.text()).toContain("Welcome back");
+    expect(wrapper!.get(".language-switcher select").element).toHaveProperty("value", "en");
+  });
+
+  it("启动等待时即可切换语言", async () => {
+    let resolveSession!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { resolveSession = resolve; })));
+    wrapper = mount(App, { attachTo: document.body });
+    await wrapper.get(".language-switcher select").setValue("en");
+    expect(wrapper.text()).toContain("Connecting to Porter…");
+    resolveSession(response({ error: { code: "unauthorized" } }, 401));
+    await flushPromises();
+    expect(wrapper.text()).toContain("Welcome back");
+  });
+
+  it("非法偏好和不可用存储回退中文，仍允许本页切换", async () => {
+    localStorage.setItem(languageStorageKey, "other");
+    await start();
+    expect(document.documentElement.lang).toBe("zh-CN");
+    wrapper!.unmount();
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("存储不可用"); });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("存储不可用"); });
+    await start();
+    await wrapper!.get(".language-switcher select").setValue("en");
+    expect(wrapper!.get("h1").text()).toBe("Port forwarding");
+    expect(document.documentElement.lang).toBe("en");
+  });
+
+  it("登录缺失输入使用所选语言提示并聚焦，保留必填语义且不发请求", async () => {
+    authenticated = false;
+    await start();
+    const callsBefore = calls.length;
+    expect(wrapper!.get("#username").attributes("required")).toBeDefined();
+    expect(wrapper!.get("#password").attributes("required")).toBeDefined();
+    expect(wrapper!.get("form").attributes("novalidate")).toBeDefined();
+    await wrapper!.get("form").trigger("submit");
+    await flushPromises();
+    expect(wrapper!.get('[role="alert"]').text()).toContain("请输入管理员用户名");
+    expect(document.activeElement).toBe(wrapper!.get("#username").element);
+    await wrapper!.get(".language-switcher select").setValue("en");
+    expect(wrapper!.get('[role="alert"]').text()).toContain("Enter administrator username");
+    await wrapper!.get("#username").setValue("admin");
+    await wrapper!.get("form").trigger("submit");
+    await flushPromises();
+    expect(wrapper!.get('[role="alert"]').text()).toContain("Enter password");
+    expect(document.activeElement).toBe(wrapper!.get("#password").element);
+    expect(wrapper!.get("#username").element).toHaveProperty("value", "admin");
+    expect(calls).toHaveLength(callsBefore);
+  });
+
+  it("登录错误随切换更新，账号密码与请求次数保持不变", async () => {
+    authenticated = false;
+    await start();
+    await wrapper!.get("#username").setValue("admin");
+    await wrapper!.get("#password").setValue("wrong");
+    await wrapper!.get("form").trigger("submit");
+    await flushPromises();
+    expect(wrapper!.get('[role="alert"]').text()).toContain("用户名或密码错误");
+    const callsBefore = calls.length;
+    await wrapper!.get(".language-switcher select").setValue("en");
+    expect(wrapper!.get('[role="alert"]').text()).toContain("Incorrect username or password");
+    expect(wrapper!.get("#username").element).toHaveProperty("value", "admin");
+    expect(wrapper!.get("#password").element).toHaveProperty("value", "wrong");
+    expect(calls).toHaveLength(callsBefore);
+  });
+
+  it("弹窗内切换保留输入和已有校验，英文保存后通知也能切回中文", async () => {
+    await start();
+    await button("新增规则").trigger("click");
+    await wrapper!.get("#rule-name").setValue("用户自定义名称");
+    await wrapper!.get(".editor").trigger("submit");
+    expect(wrapper!.get("#error-listen_port").text()).toContain("请输入 1–65535");
+    const callsBefore = calls.length;
+    await wrapper!.get("dialog .language-switcher select").setValue("en");
+    expect(wrapper!.get("#error-listen_port").text()).toBe("Enter an integer port from 1 to 65535.");
+    expect(wrapper!.get("#rule-name").element).toHaveProperty("value", "用户自定义名称");
+    expect(wrapper!.get(".protocol-choice").text()).toContain("Reliable connection-based transport");
+    expect(calls).toHaveLength(callsBefore);
+    await fillRule("用户自定义名称");
+    await wrapper!.get(".editor").trigger("submit");
+    await flushPromises();
+    expect(wrapper!.find("dialog").exists()).toBe(false);
+    expect(wrapper!.get('[role="status"]').text()).toContain("Rule created");
+    await wrapper!.get(".language-switcher select").setValue("zh-CN");
+    expect(wrapper!.get('[role="status"]').text()).toContain("规则已创建");
+    expect(calls.filter((call) => call.options.method === "POST")).toHaveLength(1);
+  });
+
+  it("服务端单播字段错误与监听冲突按原始原因响应式翻译", async () => {
+    await start();
+    await button("新增规则").trigger("click");
+    await fillRule();
+    failurePath = "/api/rules";
+    failureStatus = 400;
+    failureCode = "validation_error";
+    failureMessage = "请检查表单内容";
+    failureFields = { target_host: "目标必须是单播地址或域名" };
+    await wrapper!.get(".editor").trigger("submit");
+    await flushPromises();
+    await wrapper!.get("dialog .language-switcher select").setValue("en");
+    expect(wrapper!.get("#error-target_host").text()).toBe("The target must be a unicast address or hostname.");
+    expect(wrapper!.get('dialog [role="alert"]').text()).toContain("Please check the form fields");
+    failureStatus = 409;
+    failureCode = "listen_conflict";
+    failureMessage = "UDP 监听失败，请检查地址、端口占用和权限；更改重叠地址时请先停用规则";
+    failureFields = {};
+    await wrapper!.get(".editor").trigger("submit");
+    await flushPromises();
+    expect(wrapper!.get('dialog [role="alert"]').text()).toContain("UDP listener failed");
+    expect(wrapper!.get('dialog [role="alert"]').text()).toContain("Disable the rule before changing overlapping addresses");
+    await wrapper!.get("dialog .language-switcher select").setValue("zh-CN");
+    expect(wrapper!.get('dialog [role="alert"]').text()).toContain(failureMessage);
+  });
+
+  it("规则监听错误保留协议诊断，删除及重置确认随切换更新", async () => {
+    records = [{ ...example, status: "error", protocol: "tcp+udp", last_error_code: "listen_failed", last_error: "UDP 监听失败，请检查地址、端口占用和权限" }];
+    localStorage.setItem(languageStorageKey, "en");
+    await start();
+    expect(wrapper!.get(".desktop-table .rule-error").text()).toContain("UDP listener failed");
+    await wrapper!.get('.desktop-table [aria-label="Delete 应用入口"]').trigger("click");
+    expect(wrapper!.get("dialog").text()).toContain("Delete 应用入口?");
+    await wrapper!.get("dialog .language-switcher select").setValue("zh-CN");
+    expect(wrapper!.get("dialog").text()).toContain("确定删除 应用入口 吗？");
+    await button("保留规则").trigger("click");
+    await wrapper!.get('.desktop-table [aria-label="重置 应用入口 的流量"]').trigger("click");
+    await wrapper!.get("dialog .language-switcher select").setValue("en");
+    expect(wrapper!.get("dialog").text()).toContain("Clear the total upload and download traffic for 应用入口?");
+    expect(calls.filter((call) => call.options.method)).toHaveLength(0);
+  });
+
+  it("网络失败与已有列表在切换时保留", async () => {
+    await start();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    await wrapper!.get('[aria-label="刷新规则"]').trigger("click");
+    await flushPromises();
+    await wrapper!.get(".language-switcher select").setValue("en");
+    expect(wrapper!.get('[role="alert"]').text()).toContain("Unable to reach the server");
+    expect(wrapper!.get('[role="alert"]').text()).toContain("Showing the last synced data.");
+    expect(wrapper!.get(".desktop-table").text()).toContain("应用入口");
   });
 });
