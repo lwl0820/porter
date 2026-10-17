@@ -1,0 +1,36 @@
+{
+  "id": "linux-one-click-install",
+  "name": "linux-one-click-install",
+  "title": "增加 Linux 一键部署入口",
+  "description": "为 README 增加 curl 与 bash 一键部署命令，并实现 Ubuntu、Debian、红帽系 Linux 安装脚本",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "lwl0820",
+  "assignee": "lwl0820",
+  "createdAt": "2026-10-18",
+  "completedAt": null,
+  "branch": "codex/linux-one-click-install",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "scripts/install.sh",
+    "scripts/test-install.py",
+    "README.md",
+    "README.zh-CN.md",
+    ".github/workflows/ci.yml",
+    ".trellis/spec/backend/contracts.md",
+    ".trellis/spec/backend/index.md"
+  ],
+  "notes": "原生实现与18组独立回归已通过；用户已授权提交、合并main、删除开发分支、打版本标签并推送，采用现有项目版本v0.1.0。",
+  "meta": {
+    "release_tag": "v0.1.0"
+  }
+}

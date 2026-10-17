@@ -209,3 +209,57 @@ PORTER_TRAFFIC_FLUSH_INTERVAL 默认 5s，Go duration 范围 1ms–24h，空值�
 错误：用可清零的 rule_traffic 汇总用户配额；对每条规则分别取 max 再相加；handler 只按前端角色显隐控制权限；为停止转发从写入协程同步 Stop 并等待自身。
 
 正确：持久化独立用户周期 U、D，共享计量后按套餐公式计算；两端接口使用独立会话守卫且服务层执行归属和配额检查；数据路径仅标记并发出通知，由独立服务协调过程关闭整个用户的运行组。
+
+## 10. 场景：Linux 原生交互式一键部署
+
+### 10.1 范围与触发条件
+
+修改 `scripts/install.sh`、README 一键入口、安装器验证、GitHub 发行包或 systemd 集成时适用。安装器下载原生程序，不安装或调用 Docker。现有手工 Docker 部署与镜像发布保持独立。
+
+### 10.2 命令签名
+
+`bash scripts/install.sh [--install-dir /opt/porter] [--version v1.0.0]`；`--help` 只输出帮助。远程入口为 `curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install.sh | bash`，以 root 或通过 sudo 执行宿主写操作。默认选择最新正式 GitHub Release，显式版本允许已发布预发行版。
+
+### 10.3 输入、文件及服务契约
+
+- 首次通过 `/dev/tty` 输入管理员用户名、隐藏密码、密码确认、完整 Web 监听地址，不从脚本管道读取，不生成默认密码。先关闭终端回显再显示密码提示，EOF、INT、TERM 和正常退出均恢复回显。
+- 用户名去除首尾空白，密码保留原始值但不能全为空白；监听为显式 IPv4:端口或 [IPv6]:端口，范围 1–65535。通配监听通过同族回环地址检查健康，禁止固定使用 8080。
+- 目标 Ubuntu 22.04/24.04、Debian 12/13、RHEL/Rocky/AlmaLinux 9/10，架构 amd64/arm64；要求 systemd 为 PID 1。必要 Python 3、curl 和 CA 依赖通过系统 apt/dnf 补齐，不安装编译工具或 Docker，不自动卸载软件包。
+- GitHub API 获取正式 latest 或指定 tag；精确选择 `porter-${version}-linux-${arch}.tar.gz` 与 `SHA256SUMS`。校验唯一的对应 SHA256 项，仅读取压缩包中名为 `porter` 的唯一普通文件，不抽取任意路径/链接；执行暂存程序 `--version` 核对发布版本。
+- 默认程序 `/opt/porter/porter`（目录可指定）、配置 `/etc/porter/porter.env`、数据 `/var/lib/porter`、unit `/etc/systemd/system/porter.service`。配置与安装状态权限 600，数据目录权限 700，程序权限 755。
+- 环境文件逐项使用双引号，编码反斜线、双引号、反引号和美元符号；生产只通过标准输入和受限解析读取，禁止 shell source，禁止 Compose 的 `$$` 替换。文件内的 `PORTER_DB_PATH` 固定为 `/var/lib/porter/porter.db`。
+- `porter.service` 使用专用禁止登录的系统用户/组 porter、`Restart=on-failure`、开机自启。`AmbientCapabilities` 和 `CapabilityBoundingSet` 仅提供 `CAP_NET_BIND_SERVICE`，配合 `NoNewPrivileges`、`ProtectSystem=strict`、`StateDirectory=porter` 允许完整数据库目录写入。
+- unit 各字段按其自身语法编码，不能把 shell 引号规则泛用于所有 systemd 指令。固定 `EnvironmentFile=/etc/porter/porter.env` 不包外层引号，否则该指令可能被静默忽略；ExecStart 使用冒号前缀禁用参数变量展开，路径中的百分号仍需写为 `%%`。安装目录的控制字符、引号和反斜线提前拒绝，空格、美元符号和百分号须通过实际 unit 验证。检查 FragmentPath，不能用新 unit 静默覆盖 vendor 目录中的同名服务。
+- `/etc/porter/install.json` 保存 schema=1、directory、arch、version、status（initializing/complete）；安装目录和全局配置目录加锁，只清理本进程成功获取的锁，不能删除其他安装进程持有的锁；下载暂存只用安装目录 `.tmp`。状态、凭据和 unit 的最终写入均先在目标目录创建受限 `.new` 文件，再原子重命名；不能在最终路径留下半写文件，使初始化状态无法恢复。首次校验产物后才记录初始化状态，重复执行复用原配置、程序和数据库，不隐式升级；有初始化状态才能安全恢复局部安装。
+- 已有完整安装缺失关键文件、数据目录或 `porter.db` 时拒绝继续，不能自动创建空库冒充恢复；目录/架构不匹配、未知账号/配置/unit/数据库或符号链接等也明确拒绝接管。已托管用户校验 home、nologin 与主组，不能把未知普通用户变为服务用户。
+- 成功需要 unit 已启用且运行，所选地址 `/healthz` 返回 `{"status":"ok"}`，HTTP 检查后再次确认 unit 仍在运行。输出实际配置、数据和程序位置及 systemctl/journalctl 命令，失败不得输出就绪。
+
+### 10.4 校验与错误矩阵
+
+| 条件 | 行为 |
+| --- | --- |
+| 不支持系统/架构、非 systemd 宿主、非法参数或不能提权 | 非零退出，不部署服务。 |
+| 首次无控制终端 | 明确报错，不读取脚本内容作为用户输入。 |
+| 空白用户名/密码、密码确认不一致、无效 IP/端口 | 重试输入，不写入无效配置。 |
+| latest 不存在、API/网络失败、缺架构产物或校验和 | 非零退出，不声称已有远端发行版。 |
+| 摘要不符、重复校验项、目录/链接代替程序、版本不匹配 | 不安装暂存程序，不覆盖既有可用版本。 |
+| 未托管文件/账号/unit、安装状态不一致或路径冲突 | 保留原状，提示人工处理，不能清理数据。 |
+| systemd 启动/启用或健康检查失败 | 非零退出，保留初始化状态与配置，允许后续重试。 |
+
+### 10.5 正常、基础与异常案例
+
+- 正常：交互输入包含 `$`、反引号、引号、反斜线、中文和首尾空格的密码，最终程序凭据保持原值；IPv6 通配监听使用 `[::1]` 探测。
+- 基础：再次执行不下载新版本、不重置配置；第一次启动失败后复用原始版本及凭据重试。数据库保存整个目录，不能复制运行中的单个 db 文件作为完整备份；备份包含凭据，目录权限700、归档权限600。
+- 异常：未知 vendor unit、服务账号、损坏压缩包或不匹配校验和不能被安装器“修复”为新部署；回退旧程序需要匹配的完整数据备份。
+
+### 10.6 必需验证
+
+执行 Bash 语法、帮助、`python3 scripts/test-install.py`、actionlint 和 `git diff --check`。测试通过伪终端、模拟发布包和命令替身覆盖发行版/架构、sudo、输入校验、隐藏/恢复回显、摘要校验、原生服务配置、重复执行及失败恢复。使用可用 `systemd-analyze verify` 校验实际生成 unit，除退出码外还须检查 stderr 的忽略/无效指令警告，不能把退出0当作配置均已生效；独立启动当前二进制，验证生成配置的凭据及健康/登录行为。
+
+开发检查不能创建真实全局账号/服务或使用业务数据库；临时文件仅项目 `.tmp`。开发环境 PID1 不是 systemd 时，明确区分 unit 静态验证、实际程序验证和模拟管理命令，不能声称已经验证真实 systemd 用户切换、能力边界及全部发行版宿主安装。原 Docker 安装器测试结果不能用作原生方案的通过证据。
+
+### 10.7 错误与正确写法
+
+错误：下载 Actions 临时附件或在目标机编译；把 EnvironmentFile 当 Compose 文件转义；先覆盖程序再验证校验和；从标准输入读取密码或给未知 porter.service 写入覆盖文件。
+
+正确：复用公开 Release 资产和 SHA256SUMS，先暂存校验，再创建原生受限服务；从独立终端交互，密码按 systemd EnvironmentFile 语义编码；用安装状态和实际 FragmentPath 判断能否恢复已有部署。

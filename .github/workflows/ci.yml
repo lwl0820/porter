@@ -33,6 +33,11 @@ jobs:
           persist-credentials: false
       - name: Create workspace directories
         run: mkdir -p "$TMPDIR" "$GOCACHE" "$GOPATH" "$GOMODCACHE" "$npm_config_cache"
+      - name: 检查原生交互安装器
+        run: |
+          bash -n scripts/install.sh
+          bash scripts/install.sh --help
+          python3 scripts/test-install.py
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.2'

@@ -17,6 +17,74 @@ Porter 使用普通代理，目标服务看到转发服务器的来源地址，�
 
 ## 快速部署
 
+### 原生一键交互安装
+
+在使用 systemd 的 Linux 服务器（例如 SSH 终端）执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install.sh | bash
+```
+
+支持 Ubuntu 22.04/24.04、Debian 12/13、RHEL/Rocky Linux/AlmaLinux 9/10，架构为 amd64、arm64。需要 Bash、下载入口使用的 curl，以及 root 或 sudo 权限。安装器按需从系统仓库补齐 Python 3、curl 和 CA 证书，直接下载 GitHub Actions 编译的独立程序，不需要 Docker、Go 或 Node.js；systemd 必须是 PID 1，普通发行版容器不适用。
+
+首次依次输入**管理员用户名、管理员密码、密码确认、Web 监听地址**。密码隐藏输入，不自动生成或回显。监听必须是 `IPv4:端口` 或 `[IPv6]:端口`，如 `127.0.0.1:18080`、`0.0.0.0:8080`、`[::]:8080`，端口范围为 1–65535。通配监听的远程入口需将输出中的回环地址替换为服务器 IP。管理端口只应开放给可信网络；安装器不配置防火墙或 HTTPS。
+
+程序目录可包含空格、`$` 和 `%`；受 systemd 路径限制，不接受引号或反斜线；也不能位于 `/var/lib/porter` 数据目录或 `/etc/porter` 配置目录内。默认安装最新正式 [GitHub Release](https://github.com/lwl0820/porter/releases)，也可指定已发布版本及程序目录：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lwl0820/porter/main/scripts/install.sh | \
+  bash -s -- --version v1.0.0 --install-dir /opt/porter
+```
+
+**公开 Release 尚未发布时，安装器会明确报错，latest API 可能返回 404。** 当前发布流程仅在版本标签通过验证和镜像发布后创建二进制 Release；推送 main 发布的镜像不等于可下载的二进制。安装器下载 `porter-版本-linux-架构.tar.gz` 与 `SHA256SUMS`，严格校验对应文件摘要后才安装，不在服务器编译。
+
+默认文件和服务如下；`--install-dir` 只改变程序目录：
+
+| 项目 | 位置 |
+| --- | --- |
+| 程序 | `/opt/porter/porter` |
+| 管理员及监听配置 | `/etc/porter/porter.env`，权限 `600` |
+| 安装记录 | `/etc/porter/install.json`，权限 `600` |
+| SQLite 及日志文件 | `/var/lib/porter`，专用用户可写 |
+| systemd unit | `/etc/systemd/system/porter.service` |
+
+服务以禁止登录的专用系统用户和组 `porter` 运行，限制能力为 `CAP_NET_BIND_SERVICE`，支持低端口绑定、异常重启和开机启动。配置按 systemd `EnvironmentFile` 格式保存，值统一使用双引号，内部的反斜线、双引号、美元符和反引号需要加反斜线；例如字面 `$` 写作 `\$`、字面 `\` 写作 `\\`。不要 `source` 此文件，也不要按 Compose 规则写 `$$`。需要额外环境变量时，可按相同双引号格式追加 `PORTER_COOKIE_SECURE="true"` 等 `PORTER_*` 项。修改配置后执行 `sudo systemctl restart porter.service`。
+
+重复运行相同目录的安装命令会保留账号、监听地址、程序和数据库，不自动升级；首次局部失败可重试，已保存凭据会复用。已有安装不接受不同的 `--version`。发现未知的同名账号、服务、配置或数据时会退出，不自动接管；也不迁移已有 Docker 数据。仅在服务已启动、已启用且用户指定地址的 `/healthz` 就绪后报告成功。
+
+以下命令供 sudo 账号使用，root 用户去掉 `sudo`：
+
+```bash
+sudo systemctl status porter.service
+sudo journalctl -u porter.service -f
+sudo systemctl stop porter.service
+sudo systemctl start porter.service
+```
+
+原生实例升级前先停服务并备份完整数据目录、配置、unit 和原程序；不要复制运行中的单个数据库文件。默认安装位置可使用：
+
+```bash
+sudo systemctl stop porter.service
+install -d -m 0700 "$PWD/backups"
+sudo tar -czf "$PWD/backups/porter-before-upgrade.tar.gz" -C / \
+  etc/porter var/lib/porter etc/systemd/system/porter.service
+sudo chmod 0600 "$PWD/backups/porter-before-upgrade.tar.gz"
+sudo cp /opt/porter/porter "$PWD/backups/porter.previous"
+```
+
+随后从目标版本 Release 下载本机架构的压缩包和 `SHA256SUMS`，在独立的 `.tmp/porter-upgrade` 目录用 `sha256sum --ignore-missing -c SHA256SUMS` 确认该压缩包校验成功，再解出其中的 `porter`。不要通过重跑一键命令升级。将下方源路径替换为校验后程序的位置，自定义安装目录时同步修改目标路径：
+
+```bash
+sudo install -m 0755 .tmp/porter-upgrade/porter /opt/porter/porter.new
+sudo mv /opt/porter/porter.new /opt/porter/porter
+sudo systemctl start porter.service
+sudo journalctl -u porter.service -n 30 --no-pager
+```
+
+重启后验证登录、健康端点及实际 TCP/UDP 收发。显式升级后如继续使用安装器，请将 `/etc/porter/install.json` 的 `version` 同步为实际版本标签，保留其余字段和 `600` 权限。回退时先停服务，同时恢复原程序与匹配的**完整数据及配置备份**；旧程序不能直接使用已升级的数据库。上述原生操作与下方 Docker 卷备份相互独立。
+
+### 手工 Compose 部署
+
 使用原生 Linux Docker Engine 和 Docker Compose v2。部署采用 host 网络，新增转发端口不需要修改 Compose。
 
 **下方镜像地址为预定发布地址。首次成功发布并将 GHCR 软件包设为公开之前，镜像可能无法拉取。此时请按照下文从源码构建。**
@@ -178,9 +246,11 @@ docker compose up -d
 
 ## 兼容范围与验证
 
-生产目标为原生 Linux Docker Engine + Compose v2，架构为 `amd64`、`arm64`；发行版目标包括 Debian 12/13、Ubuntu 22.04/24.04、RHEL 9/10，以及同系 Rocky Linux、AlmaLinux 9/10。首版不承诺 rootless Docker、Docker Desktop、Windows 和 macOS 的生产支持。
+生产目标包括原生二进制 + systemd，以及手工 Linux Docker Engine + Compose v2 部署，架构为 `amd64`、`arm64`；发行版目标包括 Debian 12/13、Ubuntu 22.04/24.04、RHEL 9/10，以及同系 Rocky Linux、AlmaLinux 9/10。原生安装要求 systemd 为 PID 1。首版不承诺 rootless Docker、Docker Desktop、Windows 和 macOS 的生产支持。
 
 这些是兼容目标，不代表所有宿主系统与架构组合均已实测。CI 配置了原生 amd64、arm64 Linux 检查、真实 TCP/UDP 集成测试及 Docker 冒烟测试；CI 成功只代表对应执行环境通过。Debian、Ubuntu、红帽系真实宿主机部署需要单独记录，不能用发行版容器代替宿主机验证。请结合仓库实际工作流结果判断具体版本。
+
+原生安装器检查包含模拟发行包、伪终端、systemctl 命令替身及生成 unit 的静态验证，另以独立程序验证凭据和 HTTP 行为；这些检查不能替代真实 systemd 用户切换、低端口能力或完整发行版宿主安装实测。
 
 ## 开发与发布
 
