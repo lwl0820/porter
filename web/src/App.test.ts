@@ -579,7 +579,7 @@ describe("流量统计", () => {
     await flushPromises();
     const update = calls.find((call) => call.options.method === "PUT")!;
     expect(JSON.parse(String(update.options.body)).traffic_enabled).toBe(true);
-    expect(wrapper!.text()).toContain("累计流量 · 当前速度");
+    expect(wrapper!.text()).toContain("当前速度 · 累计流量");
     await wrapper!.get('.desktop-table [aria-label="编辑 应用入口"]').trigger("click");
     await flushPromises();
     expect(wrapper!.get<HTMLInputElement>('[aria-label="流量统计"]').element.checked).toBe(true);
@@ -591,8 +591,8 @@ describe("流量统计", () => {
     for (const surface of [".desktop-table", ".mobile-cards"]) {
       const region = wrapper!.get(surface);
       expect(region.text()).toContain("统计已关闭");
-      expect(region.text()).toContain("上行2.0 KiB0 B/s");
-      expect(region.text()).toContain("下行4.0 KiB0 B/s");
+      expect(region.text()).toContain("上行0 B/s2.0 KiB");
+      expect(region.text()).toContain("下行0 B/s4.0 KiB");
       expect(region.get(".traffic-direction strong").attributes("title")).toBe("2048 B");
       expect(region.get(".rule-traffic button").attributes("aria-label")).toBe("重置 应用入口 的流量");
     }

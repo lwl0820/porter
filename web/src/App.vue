@@ -634,7 +634,7 @@ onUnmounted(() => {
                   <th scope="col" class="direction-cell" />
                   <th scope="col">转发目标</th>
                   <th scope="col">运行状态</th>
-                  <th scope="col">流量与速度</th>
+                  <th scope="col">速度与流量</th>
                   <th scope="col" class="operation-heading">操作</th>
                 </tr>
               </thead>
